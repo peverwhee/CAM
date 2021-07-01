@@ -4744,7 +4744,7 @@ Default: Unused
 
 <!-- Radiation -->
 <entry id="radiation_scheme" type="char*16" category="radiation"
-       group="phys_ctl_nl" valid_values="rrtmg,camrt" >
+       group="phys_ctl_nl" valid_values="rrtmgp,rrtmg,camrt" >
 Type of radiation scheme employed.
 Default: set by build-namelist
 </entry>
@@ -4933,6 +4933,20 @@ Default: 'A'
 Switch to turn on Fixed Dynamical Heating in the offline radiation tool (PORT).
 Default: false
 </entry>
+
+<!-- RRTMGP -->
+<entry id="rrtmgp_coefs_lw_file" type="char*256" input_pathname="abs" category="radiation"
+       group="rrtmgp_nl" valid_values="" >
+Full pathname for LW coefficients for RRTMGP.
+Default: set by build-namelist.
+</entry>
+
+<entry id="rrtmgp_coefs_sw_file" type="char*256" input_pathname="abs" category="radiation"
+       group="rrtmgp_nl" valid_values="" >
+Full pathname for SW coefficients for RRTMGP.
+Default: set by build-namelist.
+</entry>
+
 
 <!-- Aerosol and cloud optics -->
 
