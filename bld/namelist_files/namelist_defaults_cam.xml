@@ -524,11 +524,11 @@
 <!-- RRTMGP -->
 <rrtmgp_coefs_lw_file>atm/cam/rad/rrtmgp_lw_coefs_c161006.nc</rrtmgp_coefs_lw_file>
 <rrtmgp_coefs_sw_file>atm/cam/rad/rrtmgp_sw_coefs_c161006.nc</rrtmgp_coefs_sw_file>
-<rrtmgp_iradsw>           -1     </rrtmgp_iradsw>
+<!-- <rrtmgp_iradsw>           -1     </rrtmgp_iradsw>
 <rrtmgp_iradlw>           -1     </rrtmgp_iradlw>
-<rrtmgp_irad_always>       0     </rrtmgp_irad_always>
-<rrtmgp_use_rad_dt_cosz> .false. </rrtmgp_use_rad_dt_cosz>
-<rrtmgp_spectralflux>    .false. </rrtmgp_spectralflux>
+<rrtmgp_irad_always>       0     </rrtmgp_irad_always> -->
+<!-- <rrtmgp_use_rad_dt_cosz> .false. </rrtmgp_use_rad_dt_cosz>
+<rrtmgp_spectralflux>    .false. </rrtmgp_spectralflux> -->
 
 
 <!-- CAM-RT absorptivity/emissivity lookup table -->

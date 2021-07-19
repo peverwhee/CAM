@@ -2143,10 +2143,10 @@ sub write_filepath
     }
     elsif ($rad eq 'camrt') {
         print $fh "$camsrcdir/src/physics/camrt\n";
+    }
     elsif ($rad eq 'rrtmgp') {
         print $fh "$camsrcdir/src/physics/rrtmgp\n";
         print $fh "$camsrcdir/src/physics/rrtmgp/ext\n";
-    }
     }
 
     if ($clubb_sgs) {

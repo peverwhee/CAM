@@ -204,20 +204,20 @@ subroutine radiation_readnl(nlfile)
    character(len=*), parameter :: subroutine_name = 'radiation_readnl'
 
    character(len=cl) :: rrtmgp_coefs_lw_file, rrtmgp_coefs_sw_file
-   integer :: rrtmgp_iradsw, rrtmgp_iradlw, rrtmgp_irad_always
-   logical :: rrtmgp_use_rad_dt_cosz, rrtmgp_spectralflux
-   logical :: rrtmgp_use_rad_uniform_angle
-   real    :: rrtmgp_rad_uniform_angle
+   integer :: iradsw, iradlw, irad_always
+   logical :: use_rad_dt_cosz, spectralflux
+   logical :: use_rad_uniform_angle
+   real    :: rad_uniform_angle
 
    namelist /rrtmgp_nl/ rrtmgp_coefs_lw_file,         &
                         rrtmgp_coefs_sw_file,         &
-                        rrtmgp_iradsw,                &
-                        rrtmgp_iradlw,                &
-                        rrtmgp_irad_always,           &
-                        rrtmgp_use_rad_dt_cosz,       &
-                        rrtmgp_spectralflux,          &
-                        rrtmgp_use_rad_uniform_angle, &
-                        rrtmgp_rad_uniform_angle,     &
+                        iradsw,                       &
+                        iradlw,                       &
+                        irad_always,                  &
+                        use_rad_dt_cosz,       &
+                        spectralflux,          &
+                        use_rad_uniform_angle, &
+                        rad_uniform_angle,     &
                         graupel_in_rad
    !-----------------------------------------------------------------------------
 
@@ -239,21 +239,21 @@ subroutine radiation_readnl(nlfile)
    call mpi_bcast(rrtmgp_coefs_lw_file, cl, mpi_character, mstrid, mpicom, ierr)
    if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_coefs_lw_file")
    call mpi_bcast(rrtmgp_coefs_sw_file, cl, mpi_character, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_coefs_sw_file")
-   call mpi_bcast(rrtmgp_iradsw, 1, mpi_integer, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_iradsw")
-   call mpi_bcast(rrtmgp_iradlw, 1, mpi_integer, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_iradlw")
-   call mpi_bcast(rrtmgp_irad_always, 1, mpi_integer, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_irad_always")
-   call mpi_bcast(rrtmgp_use_rad_dt_cosz, 1, mpi_logical, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_use_rad_dt_cosz")
-   call mpi_bcast(rrtmgp_spectralflux, 1, mpi_logical, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_spectralflux")
-   call mpi_bcast(rrtmgp_use_rad_uniform_angle, 1, mpi_logical, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_use_rad_uniform_angle")
-   call mpi_bcast(rrtmgp_rad_uniform_angle, 1, mpi_logical, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rrtmgp_rad_uniform_angle")   
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: coefs_sw_file")
+   call mpi_bcast(iradsw, 1, mpi_integer, mstrid, mpicom, ierr)
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: iradsw")
+   call mpi_bcast(iradlw, 1, mpi_integer, mstrid, mpicom, ierr)
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: iradlw")
+   call mpi_bcast(irad_always, 1, mpi_integer, mstrid, mpicom, ierr)
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: irad_always")
+   call mpi_bcast(use_rad_dt_cosz, 1, mpi_logical, mstrid, mpicom, ierr)
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: use_rad_dt_cosz")
+   call mpi_bcast(spectralflux, 1, mpi_logical, mstrid, mpicom, ierr)
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: spectralflux")
+   call mpi_bcast(use_rad_uniform_angle, 1, mpi_logical, mstrid, mpicom, ierr)
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: use_rad_uniform_angle")
+   call mpi_bcast(rad_uniform_angle, 1, mpi_logical, mstrid, mpicom, ierr)
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rad_uniform_angle")   
    call mpi_bcast(graupel_in_rad, 1, mpi_logical, mstrid, mpicom, ierr)
    if (ierr /= 0) call endrun(sub//": FATAL: mpi_bcast: graupel_in_rad")
 
@@ -265,13 +265,13 @@ subroutine radiation_readnl(nlfile)
    ! Set module data
    coefs_lw_file   = rrtmgp_coefs_lw_file
    coefs_sw_file   = rrtmgp_coefs_sw_file
-   iradsw          = rrtmgp_iradsw
-   iradlw          = rrtmgp_iradlw
-   irad_always     = rrtmgp_irad_always
-   use_rad_dt_cosz = rrtmgp_use_rad_dt_cosz
-   spectralflux    = rrtmgp_spectralflux
-   use_rad_uniform_angle = rrtmgp_use_rad_uniform_angle
-   rad_uniform_angle = rrtmgp_rad_uniform_angle
+   ! iradsw          = rrtmgp_iradsw
+   ! iradlw          = rrtmgp_iradlw
+   ! irad_always     = rrtmgp_irad_always
+   ! use_rad_dt_cosz = rrtmgp_use_rad_dt_cosz
+   ! spectralflux    = rrtmgp_spectralflux
+   ! use_rad_uniform_angle = rrtmgp_use_rad_uniform_angle
+   ! rad_uniform_angle = rrtmgp_rad_uniform_angle
    ! graupel_in_rad already named correctly.
 
    ! Convert iradsw, iradlw and irad_always from hours to timesteps if necessary
