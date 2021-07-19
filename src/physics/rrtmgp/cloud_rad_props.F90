@@ -31,10 +31,10 @@ public :: &
    grau_cloud_get_rad_props_lw,   &
    get_grau_optics_sw, &
    snow_cloud_get_rad_props_lw,   &
-   get_snow_optics_sw
+   get_snow_optics_sw,            &
    ! NOTE: Are these required, or are they obsolete?
    cloud_rad_props_get_sw,        & ! return SW optical props of total bulk aerosols (?)
-   cloud_rad_props_get_lw,        & ! return LW optical props of total bulk aerosols (?)
+   cloud_rad_props_get_lw           ! return LW optical props of total bulk aerosols (?)
 
 integer :: nmu, nlambda
 real(r8), allocatable :: g_mu(:)           ! mu samples on grid

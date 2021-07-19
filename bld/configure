@@ -2147,6 +2147,12 @@ sub write_filepath
     elsif ($rad eq 'rrtmgp') {
         print $fh "$camsrcdir/src/physics/rrtmgp\n";
         print $fh "$camsrcdir/src/physics/rrtmgp/ext\n";
+        print $fh "$camsrcdir/src/physics/rrtmgp/ext/rrtmgp\n";
+        print $fh "$camsrcdir/src/physics/rrtmgp/ext/rte\n";
+        print $fh "$camsrcdir/src/physics/rrtmgp/ext/rte/kernels\n";
+        print $fh "$camsrcdir/src/physics/rrtmgp/ext/rrtmgp/kernels\n";
+        print $fh "$camsrcdir/src/physics/rrtmgp/ext/extensions\n";
+        print $fh "$camsrcdir/src/physics/rrtmgp/ext/extensions/cloud_optics\n";
     }
 
     if ($clubb_sgs) {

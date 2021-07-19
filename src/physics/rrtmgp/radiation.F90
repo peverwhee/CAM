@@ -255,10 +255,10 @@ subroutine radiation_readnl(nlfile)
    call mpi_bcast(rad_uniform_angle, 1, mpi_logical, mstrid, mpicom, ierr)
    if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: rad_uniform_angle")   
    call mpi_bcast(graupel_in_rad, 1, mpi_logical, mstrid, mpicom, ierr)
-   if (ierr /= 0) call endrun(sub//": FATAL: mpi_bcast: graupel_in_rad")
+   if (ierr /= 0) call endrun(subroutine_name//": FATAL: mpi_bcast: graupel_in_rad")
 
    if (use_rad_uniform_angle .and. rad_uniform_angle == -99._r8) then
-      call endrun(sub // ' ERROR - use_rad_uniform_angle is set to .true, but rad_uniform_angle is not set ')
+      call endrun(subroutine_name // ' ERROR - use_rad_uniform_angle is set to .true, but rad_uniform_angle is not set ')
    end if
 
 
@@ -676,7 +676,7 @@ subroutine radiation_init(pbuf2d)
    
    cld_idx      = pbuf_get_index('CLD')
    cldfsnow_idx = pbuf_get_index('CLDFSNOW',errcode=ierr)
-   cldfgrau_idx = pbuf_get_index('CLDFGRAU',errcode=err)
+   cldfgrau_idx = pbuf_get_index('CLDFGRAU',errcode=ierr)
    if (cldfsnow_idx > 0) then
       call addfld('SNOW_ICLD_VISTAU', (/ 'lev' /), 'A', '1',           &
                   'Snow in-cloud extinction visible sw optical depth', &
@@ -755,7 +755,10 @@ subroutine radiation_tend( &
 
    use cloud_rad_props,    only: get_ice_optics_sw,    ice_cloud_get_rad_props_lw,    &
                                  get_liquid_optics_sw, liquid_cloud_get_rad_props_lw, &
-                                 get_snow_optics_sw,   snow_cloud_get_rad_props_lw
+                                 get_snow_optics_sw,   snow_cloud_get_rad_props_lw,   &
+                                 cloud_rad_props_get_lw,                              &
+                                 grau_cloud_get_rad_props_lw,                         &
+                                 get_grau_optics_sw
 
    use slingo,             only: slingo_liq_get_rad_props_lw, slingo_liq_optics_sw
    use ebert_curry,        only: ec_ice_optics_sw, ec_ice_get_rad_props_lw
