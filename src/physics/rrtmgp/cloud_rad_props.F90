@@ -24,17 +24,17 @@ save
 
 public :: &
    cloud_rad_props_init,          &
-   cloud_rad_props_get_sw,        & ! return SW optical props of total bulk aerosols
-   cloud_rad_props_get_lw,        & ! return LW optical props of total bulk aerosols
    get_ice_optics_sw,             & ! return Mitchell SW ice radiative properties
-   ice_cloud_get_rad_props_lw,    & ! Mitchell LW ice rad props
-   get_liquid_optics_sw,          & ! return Conley SW rad props
-   liquid_cloud_get_rad_props_lw, & ! return Conley LW rad props
+   ice_cloud_get_rad_props_lw,    & ! return Mitchell LW ice radiative properties
+   get_liquid_optics_sw,          & ! return Conley SW radiative properties
+   liquid_cloud_get_rad_props_lw, & ! return Conley LW radiative properties
    grau_cloud_get_rad_props_lw,   &
    get_grau_optics_sw, &
    snow_cloud_get_rad_props_lw,   &
    get_snow_optics_sw
-
+   ! NOTE: Are these required, or are they obsolete?
+   cloud_rad_props_get_sw,        & ! return SW optical props of total bulk aerosols (?)
+   cloud_rad_props_get_lw,        & ! return LW optical props of total bulk aerosols (?)
 
 integer :: nmu, nlambda
 real(r8), allocatable :: g_mu(:)           ! mu samples on grid
@@ -118,71 +118,71 @@ subroutine cloud_rad_props_init()
    call cnst_get_ind('CLDLIQ', ixcldliq)
 
    ! read liquid cloud optics
-   if(masterproc) then
-   call getfil( trim(liquidfile), locfn, 0)
-   call handle_ncerr( nf90_open(locfn, NF90_NOWRITE, ncid), 'liquid optics file missing')
-   write(iulog,*)' reading liquid cloud optics from file ',locfn
+   if (masterproc) then
+      call getfil( trim(liquidfile), locfn, 0)
+      call handle_ncerr( nf90_open(locfn, NF90_NOWRITE, ncid), 'liquid optics file missing')
+      write(iulog,*)' reading liquid cloud optics from file ',locfn
 
-   call handle_ncerr(nf90_inq_dimid( ncid, 'lw_band', dimid), 'getting lw_band dim')
-   call handle_ncerr(nf90_inquire_dimension( ncid, dimid, len=f_nlwbands), 'getting n lw bands')
-   if (f_nlwbands /= nlwbands) call endrun('number of lw bands does not match')
+      call handle_ncerr(nf90_inq_dimid( ncid, 'lw_band', dimid), 'getting lw_band dim')
+      call handle_ncerr(nf90_inquire_dimension( ncid, dimid, len=f_nlwbands), 'getting n lw bands')
+      if (f_nlwbands /= nlwbands) call endrun('number of lw bands does not match')
 
-   call handle_ncerr(nf90_inq_dimid( ncid, 'sw_band', dimid), 'getting sw_band_dim')
-   call handle_ncerr(nf90_inquire_dimension( ncid, dimid, len=f_nswbands), 'getting n sw bands')
-   if (f_nswbands /= nswbands) call endrun('number of sw bands does not match')
+      call handle_ncerr(nf90_inq_dimid( ncid, 'sw_band', dimid), 'getting sw_band_dim')
+      call handle_ncerr(nf90_inquire_dimension( ncid, dimid, len=f_nswbands), 'getting n sw bands')
+      if (f_nswbands /= nswbands) call endrun('number of sw bands does not match')
 
-   call handle_ncerr(nf90_inq_dimid( ncid, 'mu', mudimid), 'getting mu dim')
-   call handle_ncerr(nf90_inquire_dimension( ncid, mudimid, len=nmu), 'getting n mu samples')
+      call handle_ncerr(nf90_inq_dimid( ncid, 'mu', mudimid), 'getting mu dim')
+      call handle_ncerr(nf90_inquire_dimension( ncid, mudimid, len=nmu), 'getting n mu samples')
 
-   call handle_ncerr(nf90_inq_dimid( ncid, 'lambda_scale', lambdadimid), 'getting lambda dim')
-   call handle_ncerr(nf90_inquire_dimension( ncid, lambdadimid, len=nlambda), 'getting n lambda samples')
-   endif ! if (masterproc)
+      call handle_ncerr(nf90_inq_dimid( ncid, 'lambda_scale', lambdadimid), 'getting lambda dim')
+      call handle_ncerr(nf90_inquire_dimension( ncid, lambdadimid, len=nlambda), 'getting n lambda samples')
+   end if ! if (masterproc)
 
 #if ( defined SPMD )
    call mpibcast(nmu, 1, mpiint, 0, mpicom, ierr)
    call mpibcast(nlambda, 1, mpiint, 0, mpicom, ierr)
 #endif
 
-   allocate(g_mu(nmu))
-   allocate(g_lambda(nmu,nlambda))
-   allocate(ext_sw_liq(nmu,nlambda,nswbands) )
-   allocate(ssa_sw_liq(nmu,nlambda,nswbands))
-   allocate(asm_sw_liq(nmu,nlambda,nswbands))
-   allocate(abs_lw_liq(nmu,nlambda,nlwbands))
+   if (.not.allocated(g_mu)) allocate(g_mu(nmu))
+   if (.not.allocated(g_lambda)) allocate(g_lambda(nmu,nlambda))
+   if (.not.allocated(ext_sw_liq)) allocate(ext_sw_liq(nmu,nlambda,nswbands) )
+   if (.not.allocated(ssa_sw_liq)) allocate(ssa_sw_liq(nmu,nlambda,nswbands))
+   if (.not.allocated(asm_sw_liq)) allocate(asm_sw_liq(nmu,nlambda,nswbands))
+   if (.not.allocated(abs_lw_liq)) allocate(abs_lw_liq(nmu,nlambda,nlwbands))
 
-   if(masterproc) then
-   call handle_ncerr( nf90_inq_varid(ncid, 'mu', mu_id),&
-      'cloud optics mu get')
-   call handle_ncerr( nf90_get_var(ncid, mu_id, g_mu),&
-      'read cloud optics mu values')
+   if (masterproc) then
+      call handle_ncerr( nf90_inq_varid(ncid, 'mu', mu_id),&
+         'cloud optics mu get')
+      call handle_ncerr( nf90_get_var(ncid, mu_id, g_mu),&
+         'read cloud optics mu values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'lambda', lambda_id),&
-      'cloud optics lambda get')
-   call handle_ncerr( nf90_get_var(ncid, lambda_id, g_lambda),&
-      'read cloud optics lambda values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'lambda', lambda_id),&
+         'cloud optics lambda get')
+      call handle_ncerr( nf90_get_var(ncid, lambda_id, g_lambda),&
+         'read cloud optics lambda values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'k_ext_sw', ext_sw_liq_id),&
-      'cloud optics ext_sw_liq get')
-   call handle_ncerr( nf90_get_var(ncid, ext_sw_liq_id, ext_sw_liq),&
-      'read cloud optics ext_sw_liq values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'k_ext_sw', ext_sw_liq_id),&
+         'cloud optics ext_sw_liq get')
+      call handle_ncerr( nf90_get_var(ncid, ext_sw_liq_id, ext_sw_liq),&
+         'read cloud optics ext_sw_liq values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'ssa_sw', ssa_sw_liq_id),&
-      'cloud optics ssa_sw_liq get')
-   call handle_ncerr( nf90_get_var(ncid, ssa_sw_liq_id, ssa_sw_liq),&
-      'read cloud optics ssa_sw_liq values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'ssa_sw', ssa_sw_liq_id),&
+         'cloud optics ssa_sw_liq get')
+      call handle_ncerr( nf90_get_var(ncid, ssa_sw_liq_id, ssa_sw_liq),&
+         'read cloud optics ssa_sw_liq values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'asm_sw', asm_sw_liq_id),&
-      'cloud optics asm_sw_liq get')
-   call handle_ncerr( nf90_get_var(ncid, asm_sw_liq_id, asm_sw_liq),&
-      'read cloud optics asm_sw_liq values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'asm_sw', asm_sw_liq_id),&
+         'cloud optics asm_sw_liq get')
+      call handle_ncerr( nf90_get_var(ncid, asm_sw_liq_id, asm_sw_liq),&
+         'read cloud optics asm_sw_liq values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'k_abs_lw', abs_lw_liq_id),&
-      'cloud optics abs_lw_liq get')
-   call handle_ncerr( nf90_get_var(ncid, abs_lw_liq_id, abs_lw_liq),&
-      'read cloud optics abs_lw_liq values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'k_abs_lw', abs_lw_liq_id),&
+         'cloud optics abs_lw_liq get')
+      call handle_ncerr( nf90_get_var(ncid, abs_lw_liq_id, abs_lw_liq),&
+         'read cloud optics abs_lw_liq values')
 
-   call handle_ncerr( nf90_close(ncid), 'liquid optics file missing')
-   endif ! if masterproc
+      call handle_ncerr( nf90_close(ncid), 'liquid optics file missing')
+   end if ! if masterproc
 
 #if ( defined SPMD )
     call mpibcast(g_mu, nmu, mpir8, 0, mpicom, ierr)
@@ -197,23 +197,23 @@ subroutine cloud_rad_props_init()
    abs_lw_liq = abs_lw_liq / 0.9970449e3_r8 
 
    ! read ice cloud optics
-   if(masterproc) then
-   call getfil( trim(icefile), locfn, 0)
-   call handle_ncerr( nf90_open(locfn, NF90_NOWRITE, ncid), 'ice optics file missing')
-   write(iulog,*)' reading ice cloud optics from file ',locfn
-
-   call handle_ncerr(nf90_inq_dimid( ncid, 'lw_band', dimid), 'getting lw_band dim')
-   call handle_ncerr(nf90_inquire_dimension( ncid, dimid, len=f_nlwbands), 'getting n lw bands')
-   if (f_nlwbands /= nlwbands) call endrun('number of lw bands does not match')
-
-   call handle_ncerr(nf90_inq_dimid( ncid, 'sw_band', dimid), 'getting sw_band_dim')
-   call handle_ncerr(nf90_inquire_dimension( ncid, dimid, len=f_nswbands), 'getting n sw bands')
-   if (f_nswbands /= nswbands) call endrun('number of sw bands does not match')
-
-   call handle_ncerr(nf90_inq_dimid( ncid, 'd_eff', d_dimid), 'getting deff dim')
-   call handle_ncerr(nf90_inquire_dimension( ncid, d_dimid, len=n_g_d), 'getting n deff samples')
-
-   endif ! if (masterproc)
+   if (masterproc) then
+      call getfil( trim(icefile), locfn, 0)
+      call handle_ncerr( nf90_open(locfn, NF90_NOWRITE, ncid), 'ice optics file missing')
+      write(iulog,*)' reading ice cloud optics from file ',locfn
+      call handle_ncerr(nf90_inq_dimid( ncid, 'lw_band', dimid), 'getting lw_band dim')
+      call handle_ncerr(nf90_inquire_dimension( ncid, dimid, len=f_nlwbands), 'getting n lw bands')
+      if (f_nlwbands /= nlwbands) then
+         call endrun('number of lw bands does not match')
+      end if
+      call handle_ncerr(nf90_inq_dimid( ncid, 'sw_band', dimid), 'getting sw_band_dim')
+      call handle_ncerr(nf90_inquire_dimension( ncid, dimid, len=f_nswbands), 'getting n sw bands')
+      if (f_nswbands /= nswbands) then
+         call endrun('number of sw bands does not match')
+      end if
+      call handle_ncerr(nf90_inq_dimid( ncid, 'd_eff', d_dimid), 'getting deff dim')
+      call handle_ncerr(nf90_inquire_dimension( ncid, d_dimid, len=n_g_d), 'getting n deff samples')
+   end if ! if (masterproc)
 
 #if ( defined SPMD )
    call mpibcast(n_g_d, 1, mpiint, 0, mpicom, ierr)
@@ -221,58 +221,58 @@ subroutine cloud_rad_props_init()
 !   call mpibcast(nlwbands, 1, mpiint, 0, mpicom, ierr)
 #endif
 
-   allocate(g_d_eff(n_g_d))
-   allocate(ext_sw_ice(n_g_d,nswbands))
-   allocate(ssa_sw_ice(n_g_d,nswbands))
-   allocate(asm_sw_ice(n_g_d,nswbands))
-   allocate(abs_lw_ice(n_g_d,nlwbands))
+   if (.not.allocated(g_d_eff)) allocate(g_d_eff(n_g_d))
+   if (.not.allocated(ext_sw_ice)) allocate(ext_sw_ice(n_g_d,nswbands))
+   if (.not.allocated(ssa_sw_ice)) allocate(ssa_sw_ice(n_g_d,nswbands))
+   if (.not.allocated(asm_sw_ice)) allocate(asm_sw_ice(n_g_d,nswbands))
+   if (.not.allocated(abs_lw_ice)) allocate(abs_lw_ice(n_g_d,nlwbands))
 
-   if(masterproc) then
-   call handle_ncerr( nf90_inq_varid(ncid, 'd_eff', d_id),&
-      'cloud optics deff get')
-   call handle_ncerr( nf90_get_var(ncid, d_id, g_d_eff),&
-      'read cloud optics deff values')
+   if (masterproc) then
+      call handle_ncerr( nf90_inq_varid(ncid, 'd_eff', d_id),&
+         'cloud optics deff get')
+      call handle_ncerr( nf90_get_var(ncid, d_id, g_d_eff),&
+         'read cloud optics deff values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'sw_ext', ext_sw_ice_id),&
-      'cloud optics ext_sw_ice get')
-   call handle_ncerr(nf90_inquire_variable ( ncid, ext_sw_ice_id, ndims=ndims, dimids=vdimids),&
-       'checking dimensions of ext_sw_ice')
-   call handle_ncerr(nf90_inquire_dimension( ncid, vdimids(1), len=templen),&
-       'getting first dimension sw_ext')
-   !write(iulog,*) 'expected length',n_g_d,'actual len',templen
-   call handle_ncerr(nf90_inquire_dimension( ncid, vdimids(2), len=templen),&
-       'getting first dimension sw_ext')
-   !write(iulog,*) 'expected length',nswbands,'actual len',templen
-   call handle_ncerr( nf90_get_var(ncid, ext_sw_ice_id, ext_sw_ice),&
-      'read cloud optics ext_sw_ice values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'sw_ext', ext_sw_ice_id),&
+         'cloud optics ext_sw_ice get')
+      call handle_ncerr(nf90_inquire_variable ( ncid, ext_sw_ice_id, ndims=ndims, dimids=vdimids),&
+         'checking dimensions of ext_sw_ice')
+      call handle_ncerr(nf90_inquire_dimension( ncid, vdimids(1), len=templen),&
+         'getting first dimension sw_ext')
+      !write(iulog,*) 'expected length',n_g_d,'actual len',templen
+      call handle_ncerr(nf90_inquire_dimension( ncid, vdimids(2), len=templen),&
+         'getting first dimension sw_ext')
+      !write(iulog,*) 'expected length',nswbands,'actual len',templen
+      call handle_ncerr( nf90_get_var(ncid, ext_sw_ice_id, ext_sw_ice),&
+         'read cloud optics ext_sw_ice values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'sw_ssa', ssa_sw_ice_id),&
-      'cloud optics ssa_sw_ice get')
-   call handle_ncerr( nf90_get_var(ncid, ssa_sw_ice_id, ssa_sw_ice),&
-      'read cloud optics ssa_sw_ice values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'sw_ssa', ssa_sw_ice_id),&
+         'cloud optics ssa_sw_ice get')
+      call handle_ncerr( nf90_get_var(ncid, ssa_sw_ice_id, ssa_sw_ice),&
+         'read cloud optics ssa_sw_ice values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'sw_asm', asm_sw_ice_id),&
-      'cloud optics asm_sw_ice get')
-   call handle_ncerr( nf90_get_var(ncid, asm_sw_ice_id, asm_sw_ice),&
-      'read cloud optics asm_sw_ice values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'sw_asm', asm_sw_ice_id),&
+         'cloud optics asm_sw_ice get')
+      call handle_ncerr( nf90_get_var(ncid, asm_sw_ice_id, asm_sw_ice),&
+         'read cloud optics asm_sw_ice values')
 
-   call handle_ncerr( nf90_inq_varid(ncid, 'lw_abs', abs_lw_ice_id),&
-      'cloud optics abs_lw_ice get')
-   call handle_ncerr( nf90_get_var(ncid, abs_lw_ice_id, abs_lw_ice),&
-      'read cloud optics abs_lw_ice values')
+      call handle_ncerr( nf90_inq_varid(ncid, 'lw_abs', abs_lw_ice_id),&
+         'cloud optics abs_lw_ice get')
+      call handle_ncerr( nf90_get_var(ncid, abs_lw_ice_id, abs_lw_ice),&
+         'read cloud optics abs_lw_ice values')
 
-   call handle_ncerr( nf90_close(ncid), 'ice optics file missing')
+      call handle_ncerr( nf90_close(ncid), 'ice optics file missing')
+   end if ! if masterproc
 
-   endif ! if masterproc
 #if ( defined SPMD )
-    call mpibcast(g_d_eff, n_g_d, mpir8, 0, mpicom, ierr)
-    call mpibcast(ext_sw_ice, n_g_d*nswbands, mpir8, 0, mpicom, ierr)
-    call mpibcast(ssa_sw_ice, n_g_d*nswbands, mpir8, 0, mpicom, ierr)
-    call mpibcast(asm_sw_ice, n_g_d*nswbands, mpir8, 0, mpicom, ierr)
-    call mpibcast(abs_lw_ice, n_g_d*nlwbands, mpir8, 0, mpicom, ierr)
+   call mpibcast(g_d_eff, n_g_d, mpir8, 0, mpicom, ierr)
+   call mpibcast(ext_sw_ice, n_g_d*nswbands, mpir8, 0, mpicom, ierr)
+   call mpibcast(ssa_sw_ice, n_g_d*nswbands, mpir8, 0, mpicom, ierr)
+   call mpibcast(asm_sw_ice, n_g_d*nswbands, mpir8, 0, mpicom, ierr)
+   call mpibcast(abs_lw_ice, n_g_d*nlwbands, mpir8, 0, mpicom, ierr)
 #endif
 
-    return
+   return
 
 end subroutine cloud_rad_props_init
 

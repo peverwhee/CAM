@@ -139,9 +139,9 @@ subroutine rrtmgp_set_state( &
    ! Set surface emissivity to 1.0 here, this is treated in land surface model??
    emis_sfc = 1._r8
 
-   t_rad(:,:ktopradm)    = pstate%t(:ncol,pver:ktopcamm:-1)
-   pmid_rad(:,:ktopradm) = pstate%pmid(:ncol,pver:ktopcamm:-1)
-   pint_rad(:,:ktopradi) = pstate%pint(:ncol,pverp:ktopcami:-1)
+   t_rad(:,:ktopradm)    = pstate%t(:ncol,pver:ktopcamm:-1)     ! t_rad, pmid_rad, pint_rad
+   pmid_rad(:,:ktopradm) = pstate%pmid(:ncol,pver:ktopcamm:-1)  ! are ordered bottom-to-top (assumed radiation convention)
+   pint_rad(:,:ktopradi) = pstate%pint(:ncol,pverp:ktopcami:-1) ! reversed from CAM's top-to-bottom ordering.
 
    if (nlay == pverp) then
 
@@ -163,6 +163,7 @@ subroutine rrtmgp_set_state( &
    end do
    
    ! Define solar incident radiation
+   ! (bpm) This is done within radiation, so we should remove this block, and not output solin.
    call get_ref_solar_band_irrad(solar_band_irrad)
    call get_variability(sfac)
 
@@ -264,17 +265,21 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    write(iulog,*) '['//sub//'] shape of gas_mmr: ', SHAPE(gas_mmr), ', and shape of gas_vmr (allocated): ', SHAPE(gas_vmr)
 
    ! water vapor represented as specific humidity in CAM 
-   ! gas_vmr goes bottom to top, but gas_mmr goes top to bottom
+   ! gas_vmr goes bottom to top (assumed radiation convention), 
+   ! but gas_mmr goes top to bottom (CAM convention)
+   ! and gas_vmr can have an extra level 
    gas_vmr(:,:ktopradm) = (gas_mmr(:ncol,pver:ktopcamm:-1) / &
                   (1._r8 - gas_mmr(:ncol,pver:ktopcamm:-1))) * amdw
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm)  ! sets gas @top layer to same as at top of radiation's VMR (e.g., layer 33 is set to same value as was given at layer 32)
    end if
 
    write(iulog,*) '['//sub//'] H2O gas vmr min/max:',minval(gas_vmr),', ',maxval(gas_vmr)
-   if (minval(gas_vmr) < 0) then
-      do i = 1,nlay
-         write(iulog,*) 'layer',i,' gas_vmr: ', gas_vmr(1,pver-i), ', gas_mmr:', gas_mmr(1,i), ' Q: ', pstate%q(:,i,1)
+   if ((minval(gas_vmr) < 0) .or. (maxval(gas_vmr) > 1)) then
+      write(iulog,*) '['//sub//'] ktopcamm: ', ktopcamm, ', nlay: ',nlay,', pverp: ',pverp
+      do i = 1,pver
+         ! remember, reporting in CAM-convention of top to bottom at i=1 we want gas_vmr(1,33-1), gas_mmr(1,1)
+         write(iulog,*) 'layer',i,' gas_vmr: ', gas_vmr(1,pverp-i), ', gas_mmr:', gas_mmr(1,i), ' Q: ', pstate%q(:,i,1), ' p: ',pstate%pmid(:,i)
          ! COMPARE WITH THE WATER VAPOR (MMR) IN pstate:
       end do
    end if
@@ -381,6 +386,8 @@ subroutine rrtmgp_set_gases_sw( &
 
    ! Access gas mmr from CAM data structures.  Subset and convert mmr -> vmr.
    ! If an extra layer is used copy the mixing ratios from CAM's top model layer.
+  
+   ! This could be condensed by making a function, and more robust by using a list of gases.
 
    ! H20
    call rad_cnst_get_gas(icall, 'H2O', pstate, pbuf, gas_mmr)
@@ -389,72 +396,93 @@ subroutine rrtmgp_set_gases_sw( &
       gas_vmr(i,:ktopradm) = (gas_mmr(idxday(i),pver:ktopcamm:-1) / &
                              (1._r8 - gas_mmr(idxday(i),pver:ktopcamm:-1))) * amdw
    end do
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
-   
+   if (nlay == pverp) then
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   end if
    errmsg = gas_concs%set_vmr('H2O', gas_vmr)
-   if (len_trim(errmsg) > 0) call endrun(sub//': error setting H2O: '//trim(errmsg))
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting H2O: '//trim(errmsg))
+   end if
 
    ! CO2
    call rad_cnst_get_gas(icall, 'CO2', pstate, pbuf, gas_mmr)
    do i = 1, nday
       gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdc
    end do
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
-
+   if (nlay == pverp) then
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   end if
    errmsg = gas_concs%set_vmr('CO2', gas_vmr)
-   if (len_trim(errmsg) > 0) call endrun(sub//': error setting CO2: '//trim(errmsg))
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting CO2: '//trim(errmsg))
+   end if
 
    ! O3
    call rad_cnst_get_gas(icall, 'O3',  pstate, pbuf, gas_mmr)
    do i = 1, nday
       gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdo
    end do
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
-
+   if (nlay == pverp) then
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   end if
    errmsg = gas_concs%set_vmr('O3', gas_vmr)
-   if (len_trim(errmsg) > 0) call endrun(sub//': error setting O3: '//trim(errmsg))
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting O3: '//trim(errmsg))
+   end if
 
    ! N2O
    call rad_cnst_get_gas(icall, 'N2O', pstate, pbuf, gas_mmr)
    do i = 1, nday
       gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdn
    end do
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
-
+   if (nlay == pverp) then
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm)
+   end if 
    errmsg = gas_concs%set_vmr('N2O', gas_vmr)
-   if (len_trim(errmsg) > 0) call endrun(sub//': error setting N2O: '//trim(errmsg))
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting N2O: '//trim(errmsg))
+   end if
 
    ! CO not available
    gas_vmr = 1.e-7_r8
 
    errmsg = gas_concs%set_vmr('CO', gas_vmr)
-   if (len_trim(errmsg) > 0) call endrun(sub//': error setting CO: '//trim(errmsg))
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting CO: '//trim(errmsg))
+   end if
 
    ! CH4
    call rad_cnst_get_gas(icall, 'CH4', pstate, pbuf, gas_mmr)
    do i = 1, nday
       gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdm
    end do
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
-
+   if (nlay == pverp) then
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   end if
    errmsg = gas_concs%set_vmr('CH4', gas_vmr)
-   if (len_trim(errmsg) > 0) call endrun(sub//': error setting CH4: '//trim(errmsg))
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting CH4: '//trim(errmsg))
+   end if
 
    ! O2
    call rad_cnst_get_gas(icall, 'O2',  pstate, pbuf, gas_mmr)
    do i = 1, nday
       gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdo2
    end do
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
-
+   if (nlay == pverp) then
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   end if
    errmsg = gas_concs%set_vmr('O2', gas_vmr)
-   if (len_trim(errmsg) > 0) call endrun(sub//': error setting O2: '//trim(errmsg))
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting O2: '//trim(errmsg))
+   end if
 
    ! N2 not available
    gas_vmr = 0.7906_r8
-
    errmsg = gas_concs%set_vmr('N2', gas_vmr)
-   if (len_trim(errmsg) > 0) call endrun(sub//': error setting N2'//trim(errmsg))
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting N2'//trim(errmsg))
+   end if
 
    ! CFCs not used?
    !call rad_cnst_get_gas(icall, 'CFC11', pstate, pbuf, gas_mmr)
@@ -501,7 +529,7 @@ subroutine rrtmgp_set_cloud_lw(state, nlwbands, cldfrac, c_cld_lw_abs, lwkDist, 
    ! will provide zero optical depths there.
    cloud_lw%tau = 0.0_r8
 
-   ! flip vertical ordering to match RRTMGP
+   ! flip vertical ordering to match RRTMGP (from top-to-bottom in taucmcl to bottom-to-top in cloud_lw%tau)
    do i = 1, ngptlw
       cloud_lw%tau(:,:ktopradm,i) = taucmcl(i,:,pver:ktopcamm:-1)
    end do
