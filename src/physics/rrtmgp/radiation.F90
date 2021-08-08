@@ -88,6 +88,16 @@ type rad_out_t
    real(r8) :: fsn200(pcols)        ! fns interpolated to 200 mb
    real(r8) :: fsn200c(pcols)       ! fcns interpolated to 200 mb
    real(r8) :: fsnr(pcols)          ! fns interpolated to tropopause
+   
+   real(r8) :: flux_sw_up(pcols,pverp)     ! upward shortwave flux on interfaces
+   real(r8) :: flux_sw_clr_up(pcols,pverp) ! upward shortwave clearsky flux
+   real(r8) :: flux_sw_dn(pcols,pverp)     ! downward flux
+   real(r8) :: flux_sw_clr_dn(pcols,pverp) ! downward clearsky flux
+
+   real(r8) :: flux_lw_up(pcols,pverp)     ! upward shortwave flux on interfaces
+   real(r8) :: flux_lw_clr_up(pcols,pverp) ! upward shortwave clearsky flux
+   real(r8) :: flux_lw_dn(pcols,pverp)     ! downward flux
+   real(r8) :: flux_lw_clr_dn(pcols,pverp) ! downward clearsky flux
 
    real(r8) :: qrlc(pcols,pver)
 
@@ -1640,8 +1650,18 @@ contains
       ! reverse fluxes (should CHECK if this is necessary.)
       ! fsw is expected to be bottom-to-top, so fns becomes top-to-bottom
       do i = 1, nday
-         fns(idxday(i),ktopcami:pverp)  = fsw%flux_dn(i,ktopradi:1:-1) - fsw%flux_up(i,ktopradi:1:-1)
-         fcns(idxday(i),ktopcami:pverp) = fswc%flux_dn(i,ktopradi:1:-1) - fswc%flux_up(i,ktopradi:1:-1)
+         fns(idxday(i),ktopcami:pverp)  = &
+             fsw%flux_dn(i,ktopradi:1:-1) - fsw%flux_up(i,ktopradi:1:-1)
+         fcns(idxday(i),ktopcami:pverp) = &
+             fswc%flux_dn(i,ktopradi:1:-1) - fswc%flux_up(i,ktopradi:1:-1)
+         rd%flux_sw_up(idxday(i),ktopcami:pverp) = &
+             fsw%flux_up(i,ktopradi:1:-1)
+         rd%flux_sw_dn(idxday(i),ktopcami:pverp) = &
+             fswc%flux_dn(i,ktopradi:1:-1)
+         rd%flux_sw_clr_up(idxday(i),ktopcami:pverp) = &
+             fsw%flux_dn(i,ktopradi:1:-1) 
+         rd%flux_sw_clr_dn(idxday(i),ktopcami:pverp) = & 
+             fswc%flux_dn(i,ktopradi:1:-1)
       end do
 
       call heating_rate('SW', ncol, fns, qrs)
@@ -1747,6 +1767,10 @@ contains
 
       fnl(:ncol,ktopcami:pverp)  = flw%flux_up(:,ktopradi:1:-1)  - flw%flux_dn(:,ktopradi:1:-1)
       fcnl(:ncol,ktopcami:pverp) = flwc%flux_up(:,ktopradi:1:-1) - flwc%flux_dn(:,ktopradi:1:-1)
+      rd%flux_lw_up(:ncol,ktopcami:pverp) = flw%flux_up(:,ktopradi:1:-1)
+      rd%flux_lw_clr_up(:ncol,ktopcami:pverp) = flwc%flux_up(:,ktopradi:1:-1)
+      rd%flux_lw_dn(:ncol,ktopcami:pverp) = flw%flux_dn(:,ktopradi:1:-1)
+      rd%flux_lw_clr_dn(:ncol,ktopcami:pverp) = flwc%flux_dn(:,ktopradi:1:-1)
 
       call heating_rate('LW', ncol, fnl, qrl)
       call heating_rate('LW', ncol, fcnl, rd%qrlc)
@@ -1884,6 +1908,10 @@ subroutine radiation_output_sw(lchnk, ncol, icall, rd, pbuf, cam_out)
    call outfld('FSDS'//diag(icall),     fsds,          pcols, lchnk)
    call outfld('FSDSC'//diag(icall),    rd%fsdsc,      pcols, lchnk)
 
+   call outfld('FUS'//diag(icall),  rd%flux_sw_up,     pcols, lchnk)
+   call outfld('FUSC'//diag(icall), rd%flux_sw_clr_up, pcols, lchnk)
+   call outfld('FDS'//diag(icall),  rd%flux_sw_dn,     pcols, lchnk)
+   call outfld('FDSC'//diag(icall), rd%flux_sw_clr_dn, pcols, lchnk)
 end subroutine radiation_output_sw
 
 
@@ -1956,6 +1984,10 @@ subroutine radiation_output_lw(lchnk, ncol, icall, rd, pbuf, cam_out)
    call outfld('FLDS'//diag(icall),    cam_out%flwds, pcols, lchnk)
    call outfld('FLDSC'//diag(icall),   rd%fldsc,      pcols, lchnk)
 
+   call outfld('FDL'//diag(icall),  rd%flux_lw_dn,     pcols, lchnk)
+   call outfld('FDLC'//diag(icall), rd%flux_lw_clr_dn, pcols, lchnk)
+   call outfld('FUL'//diag(icall),  rd%flux_lw_up,     pcols, lchnk)
+   call outfld('FULC'//diag(icall), rd%flux_lw_clr_up, pcols, lchnk)
 end subroutine radiation_output_lw
 
 !===============================================================================
