@@ -239,10 +239,8 @@ subroutine cloud_rad_props_init()
          'checking dimensions of ext_sw_ice')
       call handle_ncerr(nf90_inquire_dimension( ncid, vdimids(1), len=templen),&
          'getting first dimension sw_ext')
-      !write(iulog,*) 'expected length',n_g_d,'actual len',templen
       call handle_ncerr(nf90_inquire_dimension( ncid, vdimids(2), len=templen),&
          'getting first dimension sw_ext')
-      !write(iulog,*) 'expected length',nswbands,'actual len',templen
       call handle_ncerr( nf90_get_var(ncid, ext_sw_ice_id, ext_sw_ice),&
          'read cloud optics ext_sw_ice values')
 

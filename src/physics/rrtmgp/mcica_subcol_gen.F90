@@ -34,6 +34,7 @@ use shr_RandNum_mod,  only: ShrKissRandGen
 ! old: use mo_gas_optics_specification, only: ty_gas_optics_specification
 ! use mo_gas_optics, only: ty_gas_optics ! Wrong?
 use mo_gas_optics_rrtmgp, only: ty_gas_optics_rrtmgp
+use cam_logfile,         only: iulog  ! just for debugging (BPM)
 
 implicit none
 private
@@ -259,6 +260,7 @@ subroutine mcica_subcol_sw( &
  
    do k = 1, nver
       iscloudy(:,:,k) = (cdf(:,:,k) >= 1._r8 - spread(cldf(:,k), dim=1, nCopies=ngpt) )
+      ! write(iulog,*) 'level ',k,' any(iscloud) = ',any(iscloudy(:,1,k))  ! BPM - Debugging - remove when done
    end do
 
    ! -- generate subcolumns for homogeneous clouds -----
@@ -272,6 +274,7 @@ subroutine mcica_subcol_sw( &
                taucmcl(isubcol,i,k) = tauc(n,i,k)
                ssacmcl(isubcol,i,k) = ssac(n,i,k)
                asmcmcl(isubcol,i,k) = asmc(n,i,k)
+               ! write(iulog,*) 'level ',k,' subcolumn ',isubcol, 'CLOUD! ssacmcl = ',ssacmcl(isubcol,i,k),', asmcmcl = ',asmcmcl(isubcol,i,k) ! BPM - Debugging - remove when done
             else
                taucmcl(isubcol,i,k) = 0._r8
                ssacmcl(isubcol,i,k) = 1._r8

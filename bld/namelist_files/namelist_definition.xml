@@ -4936,13 +4936,13 @@ Default: false
 
 <!-- RRTMGP -->
 <entry id="rrtmgp_coefs_lw_file" type="char*256" input_pathname="abs" category="radiation"
-       group="rrtmgp_nl" valid_values="" >
+       group="radiation_nl" valid_values="" >
 Full pathname for LW coefficients for RRTMGP.
 Default: set by build-namelist.
 </entry>
 
 <entry id="rrtmgp_coefs_sw_file" type="char*256" input_pathname="abs" category="radiation"
-       group="rrtmgp_nl" valid_values="" >
+       group="radiation_nl" valid_values="" >
 Full pathname for SW coefficients for RRTMGP.
 Default: set by build-namelist.
 </entry>

@@ -21,7 +21,7 @@ use physics_types,    only: physics_state
 use physics_buffer,   only: physics_buffer_desc
 use camsrfexch,       only: cam_in_t
 
-use radconstants,     only: get_ref_solar_band_irrad, rad_gas_index
+! use radconstants,     only: get_ref_solar_band_irrad, rad_gas_index  ! Not needed anymore (?)
 use rad_solar_var,    only: get_variability
 use rad_constituents, only: rad_cnst_get_gas
 
@@ -92,7 +92,10 @@ subroutine rrtmgp_set_state( &
    nswbands, ngpt_sw, nday, idxday, coszrs, &
    kdist_sw, eccf, t_sfc, emis_sfc, t_rad, &
    pmid_rad, pint_rad, t_day, pmid_day, pint_day, &
-   coszrs_day, alb_dir, alb_dif, solin)
+   coszrs_day, alb_dir, alb_dif) 
+   ! solin was the last (output) parameter originally (bpm) , when we remove it, don't need radconstants anymore
+   ! NOTE: We should allow solin to be specified either using old way (like commented here) or with RRTMGP
+   !       - add a namelist parameter.
 
    ! arguments
    type(physics_state), target, intent(in) :: pstate
@@ -120,18 +123,21 @@ subroutine rrtmgp_set_state( &
    real(r8), intent(out) :: coszrs_day(nday)         ! cosize of solar zenith angle
    real(r8), intent(out) :: alb_dir(nswbands,nday)   ! surface albedo, direct radiation
    real(r8), intent(out) :: alb_dif(nswbands,nday)   ! surface albedo, diffuse radiation
-   real(r8), intent(out) :: solin(pcols)             ! incident flux at domain top [W/m2]
+   ! real(r8), intent(out) :: solin(pcols)             ! incident flux at domain top [W/m2] ! REMOVED -- LET RADIATION FIGURE IT OUT
 
    ! local variables
-   integer :: k, kk, i, ib
+   integer :: k, kk, i, iband
 
    real(r8) :: solar_band_irrad(nswbands) ! rrtmg-assumed solar irradiance in each sw band
-   real(r8) :: sfac(nswbands)             ! time varying scaling factors due to Solar Spectral
-                                          ! Irrad at 1 A.U. per band
+
+   ! real(r8) :: sfac(nswbands)             ! time varying scaling factors due to Solar Spectral  / REMOVED
+   !                                        ! Irrad at 1 A.U. per band
    real(r8) :: bnd_irrad
    real(r8) :: solin_day(nday)
+   real(r8) :: wavenumber_limits(2,nswbands)
 
    character(len=*), parameter :: sub='rrtmgp_set_state'
+
    !--------------------------------------------------------------------------------
 
    t_sfc = sqrt(sqrt(cam_in%lwup(:ncol)/stebol))
@@ -142,7 +148,7 @@ subroutine rrtmgp_set_state( &
    t_rad(:,:ktopradm)    = pstate%t(:ncol,pver:ktopcamm:-1)     ! t_rad, pmid_rad, pint_rad
    pmid_rad(:,:ktopradm) = pstate%pmid(:ncol,pver:ktopcamm:-1)  ! are ordered bottom-to-top (assumed radiation convention)
    pint_rad(:,:ktopradi) = pstate%pint(:ncol,pverp:ktopcami:-1) ! reversed from CAM's top-to-bottom ordering.
-
+   
    if (nlay == pverp) then
 
       ! add midpoint and top interface values for extra layer
@@ -161,46 +167,89 @@ subroutine rrtmgp_set_state( &
       pint_day(i,:) = pint_rad(idxday(i),:)
       coszrs_day(i) = coszrs(idxday(i))
    end do
-   
+ 
+   ! <-- bpm -- let radiation deal with SOLIN & variability -->
+   ! <-- But keep this code. We should provide an option to use this method. -->
    ! Define solar incident radiation
    ! (bpm) This is done within radiation, so we should remove this block, and not output solin.
-   call get_ref_solar_band_irrad(solar_band_irrad)
-   call get_variability(sfac)
+   ! call get_ref_solar_band_irrad(solar_band_irrad)
+   ! call get_variability(sfac)
 
-   solin_day = 0._r8
-   do i = 1, nday
-      do ib = 1, nswbands
-         bnd_irrad = sfac(ib) * solar_band_irrad(ib) * eccf * coszrs_day(i)
-         solin_day(i) = solin_day(i) + bnd_irrad
-      end do
+   ! solin_day = 0._r8
+   ! do i = 1, nday
+   !    do iband = 1, nswbands
+   !       bnd_irrad = sfac(iband) * solar_band_irrad(iband) * eccf * coszrs_day(i)
+   !       solin_day(i) = solin_day(i) + bnd_irrad
+   !    end do
+   ! end do
+
+   ! solin = 0._r8
+   ! do i = 1, nday
+   !    solin(idxday(i)) = solin_day(i)
+   ! end do
+   !<-- end remove -->
+
+   ! <-- begin: old way of setting albedo hard-wired to 14 SW bands -->
+   ! ! Surface albedo (band mapping is hardcoded for RRTMG(P) code)
+   ! ! This mapping assumes nswbands=14.
+   ! if (nswbands /= 14) &
+   !    call endrun(sub//': ERROR: albedo band mapping assumes nswbands=14')
+
+   ! do i = 1, nday
+   !    ! Near-IR bands (1-9 and 14), 820-16000 cm-1, 0.625-12.195 microns
+   !    alb_dir(1:8,i) = cam_in%aldir(idxday(i))
+   !    alb_dif(1:8,i) = cam_in%aldif(idxday(i))
+   !    alb_dir(14,i)  = cam_in%aldir(idxday(i))
+   !    alb_dif(14,i)  = cam_in%aldif(idxday(i))
+
+   !    ! Set band 24 (or, band 9 counting from 1) to use linear average of UV/visible
+   !    ! and near-IR values, since this band straddles 0.7 microns:
+   !    alb_dir(9,i) = 0.5_r8*(cam_in%aldir(idxday(i)) + cam_in%asdir(idxday(i)))
+   !    alb_dif(9,i) = 0.5_r8*(cam_in%aldif(idxday(i)) + cam_in%asdif(idxday(i)))
+
+   !    ! UV/visible bands 25-28 (10-13), 16000-50000 cm-1, 0.200-0.625 micron
+   !    alb_dir(10:13,i) = cam_in%asdir(idxday(i))
+   !    alb_dif(10:13,i) = cam_in%asdif(idxday(i))
+   ! enddo
+   ! <-- end: old way of setting albedo hard-wired to 14 SW bands -->
+
+   ! More flexible way to assign albedo (from E3SM implementation)
+   ! adapted here to loop over bands and cols b/c cam_in has all cols but albedos are daylit cols
+   ! We could remove cols loop if we just set albedos for all columns separate from rrtmgp_set_state.
+   ! Albedos are input as broadband (visible, and near-IR), and we need to map
+   ! these to appropriate bands. Bands are categorized broadly as "visible" or
+   ! "infrared" based on wavenumber, so we get the wavenumber limits here
+   wavenumber_limits = kdist_sw%get_band_lims_wavenumber()
+   ! Loop over bands, and determine for each band whether it is broadly in the
+   ! visible or infrared part of the spectrum (visible or "not visible")
+   do iband = 1,nswbands
+      if (is_visible(wavenumber_limits(1,iband)) .and. &
+         is_visible(wavenumber_limits(2,iband))) then
+
+         ! Entire band is in the visible
+         do i = 1, nday
+            alb_dir(iband,i) = cam_in%asdir(idxday(i))
+            alb_dif(iband,i) = cam_in%asdif(idxday(i))
+         end do
+
+      else if (.not.is_visible(wavenumber_limits(1,iband)) .and. &
+               .not.is_visible(wavenumber_limits(2,iband))) then
+         ! Entire band is in the longwave (near-infrared)
+         do i = 1, nday
+            alb_dir(iband,i) = cam_in%aldir(idxday(i))
+            alb_dif(iband,i) = cam_in%aldif(idxday(i))
+         end do
+      else
+         ! Band straddles the visible to near-infrared transition, so we take
+         ! the albedo to be the average of the visible and near-infrared
+         ! broadband albedos
+         do i = 1, nday
+            alb_dir(iband,i) = 0.5 * (cam_in%aldir(idxday(i)) + cam_in%asdir(idxday(i)))
+            alb_dif(iband,i) = 0.5 * (cam_in%aldif(idxday(i)) + cam_in%asdif(idxday(i)))
+         end do
+      end if
    end do
 
-   solin = 0._r8
-   do i = 1, nday
-      solin(idxday(i)) = solin_day(i)
-   end do
-
-   ! Surface albedo (band mapping is hardcoded for RRTMG(P) code)
-   ! This mapping assumes nswbands=14.
-   if (nswbands /= 14) &
-      call endrun(sub//': ERROR: albedo band mapping assumes nswbands=14')
-
-   do i = 1, nday
-      ! Near-IR bands (1-9 and 14), 820-16000 cm-1, 0.625-12.195 microns
-      alb_dir(1:8,i) = cam_in%aldir(idxday(i))
-      alb_dif(1:8,i) = cam_in%aldif(idxday(i))
-      alb_dir(14,i)  = cam_in%aldir(idxday(i))
-      alb_dif(14,i)  = cam_in%aldif(idxday(i))
-
-      ! Set band 24 (or, band 9 counting from 1) to use linear average of UV/visible
-      ! and near-IR values, since this band straddles 0.7 microns:
-      alb_dir(9,i) = 0.5_r8*(cam_in%aldir(idxday(i)) + cam_in%asdir(idxday(i)))
-      alb_dif(9,i) = 0.5_r8*(cam_in%aldif(idxday(i)) + cam_in%asdif(idxday(i)))
-
-      ! UV/visible bands 25-28 (10-13), 16000-50000 cm-1, 0.200-0.625 micron
-      alb_dir(10:13,i) = cam_in%asdir(idxday(i))
-      alb_dif(10:13,i) = cam_in%asdif(idxday(i))
-   enddo
 
    ! Strictly enforce albedo bounds
    where (alb_dir < 0)
@@ -216,9 +265,28 @@ subroutine rrtmgp_set_state( &
        alb_dif = 1.0_r8
    end where
 
-
-
 end subroutine rrtmgp_set_state
+!
+
+! Function to check if a wavenumber is in the visible or IR
+logical function is_visible(wavenumber)
+
+   ! wavenumber in inverse cm (cm^-1)
+   real(r8), intent(in) :: wavenumber
+
+   ! Threshold between visible and infrared is 0.7 micron, or 14286 cm^-1
+   real(r8), parameter :: visible_wavenumber_threshold = 14286._r8  ! cm^-1
+
+   ! Wavenumber is in the visible if it is above the visible threshold
+   ! wavenumber, and in the infrared if it is below the threshold
+   if (wavenumber > visible_wavenumber_threshold) then
+      is_visible = .true.
+   else
+      is_visible = .false.
+   end if
+
+end function is_visible
+
 
 !==================================================================================================
 
@@ -260,10 +328,6 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    ! H20
    call rad_cnst_get_gas(icall, 'H2O', pstate, pbuf, gas_mmr)
-   write(iulog,*) '['//sub//'] H2O gas mmr min/max:',minval(gas_mmr),', ',maxval(gas_mmr)
-   write(iulog,*) '['//sub//'] ncol = ',ncol,', ktopradm = ',ktopradm, ', pver = ', pver
-   write(iulog,*) '['//sub//'] shape of gas_mmr: ', SHAPE(gas_mmr), ', and shape of gas_vmr (allocated): ', SHAPE(gas_vmr)
-
    ! water vapor represented as specific humidity in CAM 
    ! gas_vmr goes bottom to top (assumed radiation convention), 
    ! but gas_mmr goes top to bottom (CAM convention)
@@ -273,18 +337,7 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    if (nlay == pverp) then
       gas_vmr(:,nlay) = gas_vmr(:,ktopradm)  ! sets gas @top layer to same as at top of radiation's VMR (e.g., layer 33 is set to same value as was given at layer 32)
    end if
-
-   write(iulog,*) '['//sub//'] H2O gas vmr min/max:',minval(gas_vmr),', ',maxval(gas_vmr)
-   if ((minval(gas_vmr) < 0) .or. (maxval(gas_vmr) > 1)) then
-      write(iulog,*) '['//sub//'] ktopcamm: ', ktopcamm, ', nlay: ',nlay,', pverp: ',pverp
-      do i = 1,pver
-         ! remember, reporting in CAM-convention of top to bottom at i=1 we want gas_vmr(1,33-1), gas_mmr(1,1)
-         write(iulog,*) 'layer',i,' gas_vmr: ', gas_vmr(1,pverp-i), ', gas_mmr:', gas_mmr(1,i), ' Q: ', pstate%q(:,i,1), ' p: ',pstate%pmid(:,i)
-         ! COMPARE WITH THE WATER VAPOR (MMR) IN pstate:
-      end do
-   end if
-
-   errmsg = gas_concs%set_vmr('H2O', gas_vmr)
+   errmsg = gas_concs%set_vmr('h2o', gas_vmr)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting H2O: '//trim(errmsg))
    end if
@@ -296,7 +349,7 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
       gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
    end if
 
-   errmsg = gas_concs%set_vmr('CO2', gas_vmr)
+   errmsg = gas_concs%set_vmr('co2', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting CO2: '//trim(errmsg))
 
    ! O3
@@ -304,7 +357,7 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdo
    if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
 
-   errmsg = gas_concs%set_vmr('O3', gas_vmr)
+   errmsg = gas_concs%set_vmr('o3', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting O3: '//trim(errmsg))
 
    ! N2O
@@ -312,13 +365,13 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdn
    if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
 
-   errmsg = gas_concs%set_vmr('N2O', gas_vmr)
+   errmsg = gas_concs%set_vmr('n2o', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting N2O: '//trim(errmsg))
 
    ! CO not available
    gas_vmr  = 1.e-7_r8
 
-   errmsg = gas_concs%set_vmr('CO', gas_vmr)
+   errmsg = gas_concs%set_vmr('co', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting CO: '//trim(errmsg))
 
    ! CH4
@@ -326,7 +379,7 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdm
    if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
 
-   errmsg = gas_concs%set_vmr('CH4', gas_vmr)
+   errmsg = gas_concs%set_vmr('ch4', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting CH4: '//trim(errmsg))
 
    ! O2
@@ -334,18 +387,26 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdo2
    if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
 
-   errmsg = gas_concs%set_vmr('O2', gas_vmr)
+   errmsg = gas_concs%set_vmr('o2', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting O2: '//trim(errmsg))
 
    ! N2 not available
    gas_vmr  = 0.7906_r8
-
-   errmsg = gas_concs%set_vmr('N2', gas_vmr)
+   errmsg = gas_concs%set_vmr('n2', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting N2'//trim(errmsg))
 
-   ! CFCs not used?
-   !call rad_cnst_get_gas(icall, 'CFC11', pstate, pbuf, gas_mmr)
-   !call rad_cnst_get_gas(icall, 'CFC12', pstate, pbuf, gas_mmr)
+
+   call rad_cnst_get_gas(icall, 'CFC11', pstate, pbuf, gas_mmr)
+   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdc1
+   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   errmsg = gas_concs%set_vmr('cfc11', gas_vmr)
+   if (len_trim(errmsg) > 0) call endrun(sub//': error setting CFC11: '//trim(errmsg))
+
+   call rad_cnst_get_gas(icall, 'CFC12', pstate, pbuf, gas_mmr)
+   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdc2
+   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   errmsg = gas_concs%set_vmr('cfc12', gas_vmr)
+   if (len_trim(errmsg) > 0) call endrun(sub//': error setting CFC12: '//trim(errmsg))
 
    deallocate(gas_vmr)
 
@@ -399,7 +460,7 @@ subroutine rrtmgp_set_gases_sw( &
    if (nlay == pverp) then
       gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
    end if
-   errmsg = gas_concs%set_vmr('H2O', gas_vmr)
+   errmsg = gas_concs%set_vmr('h2o', gas_vmr)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting H2O: '//trim(errmsg))
    end if
@@ -412,7 +473,7 @@ subroutine rrtmgp_set_gases_sw( &
    if (nlay == pverp) then
       gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
    end if
-   errmsg = gas_concs%set_vmr('CO2', gas_vmr)
+   errmsg = gas_concs%set_vmr('co2', gas_vmr)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting CO2: '//trim(errmsg))
    end if
@@ -425,7 +486,7 @@ subroutine rrtmgp_set_gases_sw( &
    if (nlay == pverp) then
       gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
    end if
-   errmsg = gas_concs%set_vmr('O3', gas_vmr)
+   errmsg = gas_concs%set_vmr('o3', gas_vmr)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting O3: '//trim(errmsg))
    end if
@@ -438,15 +499,14 @@ subroutine rrtmgp_set_gases_sw( &
    if (nlay == pverp) then
       gas_vmr(:,nlay) = gas_vmr(:,ktopradm)
    end if 
-   errmsg = gas_concs%set_vmr('N2O', gas_vmr)
+   errmsg = gas_concs%set_vmr('n2o', gas_vmr)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting N2O: '//trim(errmsg))
    end if
 
    ! CO not available
-   gas_vmr = 1.e-7_r8
-
-   errmsg = gas_concs%set_vmr('CO', gas_vmr)
+   ! gas_vmr(1:nday,1:ktopradm) = 1.e-7_r8
+   errmsg = gas_concs%set_vmr('co', 1.e-7_r8)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting CO: '//trim(errmsg))
    end if
@@ -459,7 +519,7 @@ subroutine rrtmgp_set_gases_sw( &
    if (nlay == pverp) then
       gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
    end if
-   errmsg = gas_concs%set_vmr('CH4', gas_vmr)
+   errmsg = gas_concs%set_vmr('ch4', gas_vmr)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting CH4: '//trim(errmsg))
    end if
@@ -472,21 +532,41 @@ subroutine rrtmgp_set_gases_sw( &
    if (nlay == pverp) then
       gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
    end if
-   errmsg = gas_concs%set_vmr('O2', gas_vmr)
+   errmsg = gas_concs%set_vmr('o2', gas_vmr)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting O2: '//trim(errmsg))
    end if
 
    ! N2 not available
-   gas_vmr = 0.7906_r8
-   errmsg = gas_concs%set_vmr('N2', gas_vmr)
+   ! gas_vmr(1:nday,1:ktopradm) = 0.7906_r8
+   errmsg = gas_concs%set_vmr('n2', 0.7906_r8)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting N2'//trim(errmsg))
    end if
 
-   ! CFCs not used?
-   !call rad_cnst_get_gas(icall, 'CFC11', pstate, pbuf, gas_mmr)
-   !call rad_cnst_get_gas(icall, 'CFC12', pstate, pbuf, gas_mmr)
+   call rad_cnst_get_gas(icall, 'CFC11', pstate, pbuf, gas_mmr)
+   do i = 1,nday
+      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i), pver:ktopcamm:-1) * amdc1
+   end do
+   if (nlay == pverp) then
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm)
+   end if 
+   errmsg = gas_concs%set_vmr('cfc11', gas_vmr)
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting CFC11: '//trim(errmsg))
+   end if
+
+   call rad_cnst_get_gas(icall, 'CFC12', pstate, pbuf, gas_mmr)
+   do i = 1,nday
+      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i), pver:ktopcamm:-1) * amdc2
+   end do
+   if (nlay == pverp) then
+      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   end if
+   errmsg = gas_concs%set_vmr('cfc12', gas_vmr)
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': error setting CFC12: '//trim(errmsg))
+   end if
 
    deallocate(gas_vmr)
 
@@ -602,6 +682,9 @@ subroutine rrtmgp_set_cloud_sw( &
    real(r8), allocatable :: taucmcl(:,:,:)
    real(r8), allocatable :: ssacmcl(:,:,:)
    real(r8), allocatable :: asmcmcl(:,:,:)
+
+   character(len=32)  :: sub = 'rrtmgp_set_cloud_sw'
+   character(len=128) :: errmsg
    !--------------------------------------------------------------------------------
 
    ngptsw = kdist_sw%get_ngpt()
@@ -652,6 +735,7 @@ subroutine rrtmgp_set_cloud_sw( &
 
    ! If there is an extra layer in the radiation then this initialization
    ! will provide the optical properties there.
+   ! These should be shape (ncol, nlay, ngpt)
    cloud_sw%tau = 0.0_r8
    cloud_sw%ssa = 1.0_r8
    cloud_sw%g   = 0.0_r8
@@ -662,8 +746,12 @@ subroutine rrtmgp_set_cloud_sw( &
       cloud_sw%tau(:,:ktopradm,i) = taucmcl(i,:,pver:ktopcamm:-1)
    end do
 
-!*** should delta scaling should be applied here?
-
+   ! delta scaling adjusts for forward scattering
+   errmsg = cloud_sw%delta_scale()
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': ERROR: cloud_sw%delta_scale: '//trim(errmsg))
+   end if
+   
    deallocate( &
       cldf, tauc, ssac, asmc, &
       taucmcl, ssacmcl, asmcmcl )
