@@ -913,7 +913,7 @@ subroutine radiation_tend( &
    ! RRTMGP cloud objects (McICA sampling of cloud optical properties)
    type(ty_optical_props_1scl) :: cloud_lw
    type(ty_optical_props_2str) :: cloud_sw
-   real(r8), allocatable :: band_lims_wavenum(:,:)  ! should this be here, or module-level data?
+   ! real(r8), allocatable :: band_lims_wavenum(:,:)  ! use kdist_sw%get_band_lims_wavenumber() instead?
 
    integer :: icall                 ! index through climate/diagnostic radiation calls
    logical :: active_calls(0:N_DIAG)
@@ -1024,6 +1024,12 @@ subroutine radiation_tend( &
       call pbuf_get_field(pbuf, ld_idx, ld)
    end if
 
+   ! initialize (and reset) all the fluxes
+   call initialize_rrtmgp_fluxes(ncol, nlay+1, nswbands, fsw, do_direct=.true.)
+   call initialize_rrtmgp_fluxes(ncol, nlay+1, nswbands, fswc, do_direct=.true.)
+   call initialize_rrtmgp_fluxes(ncol, nlay+1, nlwbands, flw)
+   call initialize_rrtmgp_fluxes(ncol, nlay+1, nlwbands, flwc)
+
    !  For CRM, make cloud equal to input observations:
    if (scm_crm_mode .and. have_cld) then
       do k = 1, pver
@@ -1046,8 +1052,6 @@ subroutine radiation_tend( &
    ! To avoid non-daylit columns
    ! from having shortwave heating, we should reset here:
    if (nday == 0) then
-      call reset_fluxes(fsw)
-      call reset_fluxes(fswc)
       qrs(1:ncol,1:pver) = 0
       rd%qrsc(1:ncol,1:pver) = 0  ! this is what gets turned into QRSC in output (probably not needed here.)
       dosw = .false.
@@ -1061,11 +1065,6 @@ subroutine radiation_tend( &
    !    print*, "BPM - radiation - LEVEL ",k," state%t = ",state%t(1,k)
    ! end do
 
-   ! initialize (and reset) all the fluxes
-   call initialize_rrtmgp_fluxes(ncol, nlay+1, nswbands, fsw, do_direct=.true.)
-   call initialize_rrtmgp_fluxes(ncol, nlay+1, nswbands, fswc, do_direct=.true.)
-   call initialize_rrtmgp_fluxes(ncol, nlay+1, nlwbands, flw)
-   call initialize_rrtmgp_fluxes(ncol, nlay+1, nlwbands, flwc)
 
    if (dosw .or. dolw) then
 
@@ -1461,10 +1460,11 @@ subroutine radiation_tend( &
 
                ! set gas concentrations
                ! bpm initialize gas_concs_sw: (available_gases or active_gases?)
-               errmsg = gas_concs_sw%init(active_gases)
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by gas_concs_sw%init: '//trim(errmsg))
-               end if
+               call set_available_gases(active_gases, gas_concs_sw)
+!               errmsg = gas_concs_sw%init(active_gases)  ! gas names (char) to ty_gas_concs
+!               if (len_trim(errmsg) > 0) then
+!                  call endrun(sub//': ERROR code returned by gas_concs_sw%init: '//trim(errmsg))
+!               end if
                call rrtmgp_set_gases_sw(             & ! Put gas volume mixing ratio into gas_concs_sw
                                         icall,       & ! input
                                         state,       & ! input ; note: state/pbuf are top-to-bottom
@@ -1588,10 +1588,11 @@ subroutine radiation_tend( &
 
             if (active_calls(icall)) then
                ! initialize the gas concentrations
-               errmsg = gas_concs_lw%init(active_gases)
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by gas_concs_lw%init: '//trim(errmsg))
-               end if
+               call set_available_gases(active_gases, gas_concs_lw)
+!               errmsg = gas_concs_lw%init(active_gases)
+!               if (len_trim(errmsg) > 0) then
+!                  call endrun(sub//': ERROR code returned by gas_concs_lw%init: '//trim(errmsg))
+!               end if
                call rrtmgp_set_gases_lw(icall, state, pbuf, nlay, gas_concs_lw)
 
                call t_startf('aeroptics')
@@ -2215,7 +2216,7 @@ subroutine coefs_init(coefs_file, kdist, available_gases)
    ierr = pio_inq_dimid(fh, 'mixing_fraction', did)
    if (ierr /= PIO_NOERR) call endrun(sub//': mixing_fraction not found')
    ierr = pio_inq_dimlen(fh, did, mixing_fraction)
-
+   
    ierr = pio_inq_dimid(fh, 'gpt', did)
    if (ierr /= PIO_NOERR) call endrun(sub//': gpt not found')
    ierr = pio_inq_dimlen(fh, did, gpt)
@@ -2688,7 +2689,7 @@ subroutine set_available_gases(gases, gas_concentrations)
    character(len=128) :: error_msg
    ! Initialize with lowercase gas names; we should work in lowercase
    ! whenever possible because we cannot trust string comparisons in RRTMGP
-   ! to be case insensitive
+   ! to be case insensitive ... it *should* work regardless of case.
    do igas = 1,size(gases)
       gases_lowercase(igas) = trim(lower_case(gases(igas)))
    end do
