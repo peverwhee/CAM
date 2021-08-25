@@ -1282,21 +1282,22 @@ subroutine radiation_tend( &
          ! Note the init method is allocating memory, but there is no method to
          ! deallocate the memory.  Not sure whether Fortran will deallocate this
          ! memory when the local object goes out of scope.
-         errmsg = cloud_sw%alloc_2str(nday, nlay, kdist_sw, name='shortwave cloud optics')
-         if (len_trim(errmsg) > 0) then
-            call endrun(sub//': ERROR: cloud_sw%alloc_2str: '//trim(errmsg))
-         end if
-         ! these are all expected to be shape (ncol, nlay, ngpt)
-         cloud_sw%tau = 0.0_r8
-         cloud_sw%ssa = 1.0_r8
-         cloud_sw%g   = 0.0_r8
+         ! errmsg = cloud_sw%alloc_2str(nday, nlay, kdist_sw, name='shortwave cloud optics')
+         ! if (len_trim(errmsg) > 0) then
+         !    call endrun(sub//': ERROR: cloud_sw%alloc_2str: '//trim(errmsg))
+         ! end if
+         ! ! these are all expected to be shape (ncol, nlay, ngpt)
+         ! cloud_sw%tau = 0.0_r8
+         ! cloud_sw%ssa = 1.0_r8
+         ! cloud_sw%g   = 0.0_r8
+         call initialize_rrtmgp_cloud_optics_sw(nday, nlay, kdist_sw, cloud_sw)
    
          call rrtmgp_set_cloud_sw( &
             nswbands,              & ! input
             nday,                  & ! input
             nlay,                  & ! input
             idxday,                & ! input
-            pmid_day(:,nlay:1:-1),              & ! input, ordered bottom-to-top from rrtmgp_set_state (passed to mcica) This is wrong order, but only used to set random numbers, so does not matter.
+            pmid_day(:,nlay:1:-1), & ! input, ordered bottom-to-top from rrtmgp_set_state (passed to mcica) This is wrong order, but only used to set random numbers, so does not matter.
             cldfprime,             & ! input, ordered top-to-bottom
             c_cld_tau,             & ! input, ordered, top-to-bottom
             c_cld_tau_w,           & ! input, ordered, top-to-bottom
@@ -1413,11 +1414,12 @@ subroutine radiation_tend( &
          ! deallocate the memory.  Not sure whether Fortran will deallocate this
          ! memory when the local object goes out of scope.
 
-         errmsg = cloud_lw%alloc_1scl(ncol, nlay, kdist_lw, name='longwave cloud optics') 
-         if (len_trim(errmsg) > 0) then
-            call endrun(sub//': ERROR: cloud_lw%init_1scalar: '//trim(errmsg))
-         end if
-         cloud_lw%tau = 0.0
+         ! errmsg = cloud_lw%alloc_1scl(ncol, nlay, kdist_lw, name='longwave cloud optics') 
+         ! if (len_trim(errmsg) > 0) then
+         !    call endrun(sub//': ERROR: cloud_lw%init_1scalar: '//trim(errmsg))
+         ! end if
+         ! cloud_lw%tau = 0.0
+         call initialize_rrtmgp_cloud_optics_lw(ncol, nlay, kdist_lw, cloud_lw)
          
          call rrtmgp_set_cloud_lw( & ! Sets the LW optical depth (tau) that is passed to RRTMGP
             state,                 & ! input (%ncol, %pmid [top-to-bottom])
@@ -1554,6 +1556,11 @@ subroutine radiation_tend( &
 
             end if ! (active_calls(icall))
          end do    ! loop over diagnostic calcs (icall)
+         
+         call free_optics_sw(cloud_sw)  ! deallocate cloud optics
+         call free_fluxes(fsw)
+         call free_fluxes(fswc)
+
       else
          if (conserve_energy) then
             qrs(1:ncol,1:pver) = qrs(1:ncol,1:pver) / state%pdel(1:ncol,1:pver)
@@ -1646,6 +1653,11 @@ subroutine radiation_tend( &
 
             end if
          end do
+
+         call free_optics_lw(cloud_lw)  ! deallocate cloud optics
+         call free_fluxes(flw)
+         call free_fluxes(flwc)
+
       else
          if (conserve_energy) then
             qrl(1:ncol,1:pver) = qrl(1:ncol,1:pver) / state%pdel(1:ncol,1:pver)
@@ -2757,6 +2769,84 @@ subroutine initialize_rrtmgp_fluxes(ncol, nlevels, nbands, fluxes, do_direct)
    call reset_fluxes(fluxes)
 
 end subroutine initialize_rrtmgp_fluxes
+
+
+subroutine initialize_rrtmgp_cloud_optics_sw(ncol, nlevels, kdist, optics)
+   use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
+   use mo_optical_props,      only: ty_optical_props_2str
+
+   integer, intent(in) :: ncol, nlevels
+   type(ty_gas_optics_rrtmgp), intent(in) :: kdist
+   type(ty_optical_props_2str), intent(out) :: optics
+
+   integer :: ngpt
+   character(len=128) :: errmsg
+   character(len=128) :: sub = 'initialize_rrtmgp_cloud_optics_sw'
+
+   ngpt = kdist%get_ngpt()
+   errmsg = optics%alloc_2str(ncol, nlevels, kdist, name='shortwave cloud optics')
+   if (len_trim(errmsg) > 0) then
+      call endrun(trim(sub)//': ERROR: optics%alloc_2str: '//trim(errmsg))
+   end if
+   ! these are all expected to be shape (ncol, nlay, ngpt)
+   optics%tau(:ncol,:nlevels,:ngpt) = 0.0_r8
+   optics%ssa(:ncol,:nlevels,:ngpt) = 1.0_r8
+   optics%g(:ncol,:nlevels,:ngpt)   = 0.0_r8   
+end subroutine initialize_rrtmgp_cloud_optics_sw
+
+subroutine initialize_rrtmgp_cloud_optics_lw(ncol, nlevels, kdist, optics)
+   use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
+   use mo_optical_props,      only: ty_optical_props_1scl
+
+   integer, intent(in) :: ncol, nlevels
+   type(ty_gas_optics_rrtmgp), intent(in) :: kdist
+   type(ty_optical_props_1scl), intent(out) :: optics
+
+   integer :: ngpt
+   character(len=128) :: errmsg
+   character(len=128) :: sub = 'initialize_rrtmgp_cloud_optics_lw'
+
+   ngpt = kdist%get_ngpt()
+   errmsg =optics%alloc_1scl(ncol, nlevels, kdist, name='longwave cloud optics') 
+   if (len_trim(errmsg) > 0) then
+      call endrun(trim(sub)//': ERROR: optics%init_1scalar: '//trim(errmsg))
+   end if
+   optics%tau(:ncol, :nlevels, :ngpt) = 0.0
+   
+end subroutine initialize_rrtmgp_cloud_optics_lw
+
+
+subroutine free_optics_sw(optics)
+   use mo_optical_props, only: ty_optical_props_2str
+   type(ty_optical_props_2str), intent(inout) :: optics
+   if (allocated(optics%tau)) deallocate(optics%tau)
+   if (allocated(optics%ssa)) deallocate(optics%ssa)
+   if (allocated(optics%g)) deallocate(optics%g)
+   call optics%finalize()
+end subroutine free_optics_sw
+
+
+subroutine free_optics_lw(optics)
+   use mo_optical_props, only: ty_optical_props_1scl
+   type(ty_optical_props_1scl), intent(inout) :: optics
+   if (allocated(optics%tau)) deallocate(optics%tau)
+   call optics%finalize()
+end subroutine free_optics_lw
+
+
+subroutine free_fluxes(fluxes)
+   use mo_fluxes_byband, only: ty_fluxes_byband
+   type(ty_fluxes_byband), intent(inout) :: fluxes
+   if (associated(fluxes%flux_up)) deallocate(fluxes%flux_up)
+   if (associated(fluxes%flux_dn)) deallocate(fluxes%flux_dn)
+   if (associated(fluxes%flux_net)) deallocate(fluxes%flux_net)
+   if (associated(fluxes%flux_dn_dir)) deallocate(fluxes%flux_dn_dir)
+   if (associated(fluxes%bnd_flux_up)) deallocate(fluxes%bnd_flux_up)
+   if (associated(fluxes%bnd_flux_dn)) deallocate(fluxes%bnd_flux_dn)
+   if (associated(fluxes%bnd_flux_net)) deallocate(fluxes%bnd_flux_net)
+   if (associated(fluxes%bnd_flux_dn_dir)) deallocate(fluxes%bnd_flux_dn_dir)
+end subroutine free_fluxes
+
 
 !
 ! a simple clipping subroutine

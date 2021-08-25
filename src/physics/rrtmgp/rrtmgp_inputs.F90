@@ -689,7 +689,7 @@ subroutine rrtmgp_set_cloud_sw( &
 
    ngptsw = kdist_sw%get_ngpt()
    nver   = pver - ktopcamm + 1
-   
+
    ! Compute the input quantities needed for the 2-stream optical props
    ! object.  Also subset the vertical levels and the daylight columns
    ! here.  But don't reorder the vertical index because the mcica sub-column
@@ -736,10 +736,10 @@ subroutine rrtmgp_set_cloud_sw( &
    ! If there is an extra layer in the radiation then this initialization
    ! will provide the optical properties there.
    ! These should be shape (ncol, nlay, ngpt)
-   cloud_sw%tau = 0.0_r8
-   cloud_sw%ssa = 1.0_r8
-   cloud_sw%g   = 0.0_r8
-   ! flip vertical ordering to match RRTMGP
+   cloud_sw%tau(:,:,:) = 0.0_r8
+   cloud_sw%ssa(:,:,:) = 1.0_r8
+   cloud_sw%g(:,:,:)   = 0.0_r8
+   ! flip vertical ordering from top-to-bottom to match RRTMGP bottom-to-top
    do i = 1, ngptsw
       cloud_sw%g  (:,:ktopradm,i) = asmcmcl(i,:,pver:ktopcamm:-1)
       cloud_sw%ssa(:,:ktopradm,i) = ssacmcl(i,:,pver:ktopcamm:-1)
