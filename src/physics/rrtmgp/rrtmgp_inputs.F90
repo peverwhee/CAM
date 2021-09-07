@@ -728,10 +728,23 @@ subroutine rrtmgp_set_cloud_sw( &
       enddo
    enddo
 
+   print*,'--- IN rrtmgp_set_cloud_sw BEFORE mcica_subcol_sw ---'
+   do k=1,nver
+      print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUC)=",f12.6)', k, cldf(1,k),maxval(tauc(:,1,k))
+   end do
+
+   ! mcica_subcol_sw converts to gpts (e.g., 224 pts instead of 14 bands)
    call mcica_subcol_sw( &
       kdist_sw, nswbands, ngptsw, nday, nlay, nver, changeseed, &
       pmid, cldf, tauc, ssac, asmc,     &
       taucmcl, ssacmcl, asmcmcl)
+
+   print*,'+++ IN rrtmgp_set_cloud_sw AFTER mcica_subcol_sw +++'
+   do k=1,nver
+      print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUCMCL)=",f12.6)', k, cldf(1,k),maxval(taucmcl(:,1,k))
+   end do
+   ! STILL GOOD
+   
 
    ! If there is an extra layer in the radiation then this initialization
    ! will provide the optical properties there.
@@ -746,11 +759,25 @@ subroutine rrtmgp_set_cloud_sw( &
       cloud_sw%tau(:,:ktopradm,i) = taucmcl(i,:,pver:ktopcamm:-1)
    end do
 
+   print*,'[INFO] SHAPE OF taucmcl',shape(taucmcl),' SHAPE OF cloud_sw%tau: ',shape(cloud_sw%tau)
+
+   print*,'+++ IN rrtmgp_set_cloud_sw AFTER cloud_sw setting +++'
+   do k=1,nver
+      print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUCMCL)=",f12.6,2x," Max(cloud_sw%tau)= ",f12.6)', k, cldf(1,k),maxval(taucmcl(:,1,k)),maxval(cloud_sw%tau(1,k,:))
+   end do
+
    ! delta scaling adjusts for forward scattering
-   errmsg = cloud_sw%delta_scale()
-   if (len_trim(errmsg) > 0) then
-      call endrun(sub//': ERROR: cloud_sw%delta_scale: '//trim(errmsg))
-   end if
+   ! If delta_scale() is applied, cloud_sw%tau differs from RRTMG implementation going into SW calculation.   
+   ! errmsg = cloud_sw%delta_scale()
+   ! if (len_trim(errmsg) > 0) then
+   !    call endrun(sub//': ERROR: cloud_sw%delta_scale: '//trim(errmsg))
+   ! end if
+
+   ! print*,'+++ IN rrtmgp_set_cloud_sw AFTER delta_scale setting +++'
+   ! do k=1,nver
+   !    print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUCMCL)=",f12.6,2x," Max(cloud_sw%tau)= ",f12.6)', k, cldf(1,k),maxval(taucmcl(:,1,k)),maxval(cloud_sw%tau(1,k,:))
+   ! end do
+
    
    deallocate( &
       cldf, tauc, ssac, asmc, &
