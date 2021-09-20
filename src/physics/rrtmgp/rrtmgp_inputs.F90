@@ -66,22 +66,38 @@ integer :: ktopradm ! rrtmgp index of layer corresponding to ktopcamm
 integer :: ktopcami ! cam index of top interface
 integer :: ktopradi ! rrtmgp index of interface corresponding to ktopcami
 
+integer :: kbotcamm ! cam index of top layer
+integer :: kbotradm ! rrtmgp index of layer corresponding to ktopcamm
+integer :: kbotcami ! cam index of top interface
+integer :: kbotradi ! rrtmgp index of interface corresponding to ktopcami
+integer :: kstride ! stride for vertical level operations (-1 or 1)
+
 !==================================================================================================
 contains
 !==================================================================================================
 
-subroutine rrtmgp_inputs_init(ktcamm, ktradm, ktcami, ktradi)
+subroutine rrtmgp_inputs_init(ktcamm, ktradm, ktcami, ktradi, kbcamm, kbcami, kbradm, kbradi, ks)
       
    integer, intent(in) :: ktcamm
    integer, intent(in) :: ktradm
    integer, intent(in) :: ktcami
    integer, intent(in) :: ktradi
+   integer, intent(in) :: kbcamm
+   integer, intent(in) :: kbradm
+   integer, intent(in) :: kbcami
+   integer, intent(in) :: kbradi
+   integer, intent(in) :: ks
    !--------------------------------------------------------------------------------
 
    ktopcamm = ktcamm
    ktopradm = ktradm
    ktopcami = ktcami
    ktopradi = ktradi
+   kbotcamm = ktcamm
+   kbotradm = ktradm
+   kbotcami = ktcami
+   kbotradi = ktradi
+   kstride = ks
 
 end subroutine rrtmgp_inputs_init
 
@@ -144,19 +160,20 @@ subroutine rrtmgp_set_state( &
 
    ! Set surface emissivity to 1.0 here, this is treated in land surface model??
    emis_sfc = 1._r8
+   ! Assume level ordering is the same for both CAM and RAD 
+   ! There could be layers at the top that are not included in radiation, so work our way upward from the bottom.
 
-   t_rad(:,:ktopradm)    = pstate%t(:ncol,pver:ktopcamm:-1)     ! t_rad, pmid_rad, pint_rad
-   pmid_rad(:,:ktopradm) = pstate%pmid(:ncol,pver:ktopcamm:-1)  ! are ordered bottom-to-top (assumed radiation convention)
-   pint_rad(:,:ktopradi) = pstate%pint(:ncol,pverp:ktopcami:-1) ! reversed from CAM's top-to-bottom ordering.
+   t_rad(:ncol, nlay:nlay-pver+1:-1)    = pstate%t(:ncol, pver:nlay-pver:-1)
+   pmid_rad(:ncol, nlay:nlay+1-pver:-1) = pstate%pmid(:ncol, pver:nlay-pver:-1)  
+   pint_rad(:ncol, nlay+1:nlay+1-pver:-1) = pstate%pint(:ncol, pverp:nlay+1-pver:-1)
    
    if (nlay == pverp) then
-
       ! add midpoint and top interface values for extra layer
-      t_rad(:,nlay)      = pstate%t(:ncol,1)
-      pmid_rad(:,nlay)   = 0.5_r8 * pstate%pint(:ncol,1)
+      t_rad(:,1)      = pstate%t(:ncol,1)
+      pmid_rad(:,1)   = 0.5_r8 * pstate%pint(:ncol,1)
 
       ! pint_rad(:,nlay+1) = 1.e-2_r8 ! rrtmg value
-      pint_rad(:,nlay+1) = 1.01_r8
+      pint_rad(:,1) = 1.01_r8
 
    end if
 
@@ -315,7 +332,7 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    character(len=128)          :: errmsg
    character(len=*), parameter :: sub = 'rrtmgp_set_gases_lw'
-   integer :: i !! debugging index
+   integer :: i
    !--------------------------------------------------------------------------------
 
    ncol = pstate%ncol
@@ -325,6 +342,7 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    ! Access gas mmr from CAM data structures.  Subset and convert mmr -> vmr.
    ! If an extra layer is used copy the mixing ratios from CAM's top model layer.
+   ! Assume levels are in same order for CAM and RAD.
 
    ! H20
    call rad_cnst_get_gas(icall, 'H2O', pstate, pbuf, gas_mmr)
@@ -332,10 +350,10 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    ! gas_vmr goes bottom to top (assumed radiation convention), 
    ! but gas_mmr goes top to bottom (CAM convention)
    ! and gas_vmr can have an extra level 
-   gas_vmr(:,:ktopradm) = (gas_mmr(:ncol,pver:ktopcamm:-1) / &
-                  (1._r8 - gas_mmr(:ncol,pver:ktopcamm:-1))) * amdw
+   gas_vmr(:ncol,nlay+1-pver:) = (gas_mmr(:ncol,:pver) / &
+                  (1._r8 - gas_mmr(:ncol,:pver))) * amdw
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm)  ! sets gas @top layer to same as at top of radiation's VMR (e.g., layer 33 is set to same value as was given at layer 32)
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver)  ! sets gas @top layer to same as at top of radiation's VMR (e.g., layer 33 is set to same value as was given at layer 32)
    end if
    errmsg = gas_concs%set_vmr('h2o', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -344,9 +362,9 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    ! CO2
    call rad_cnst_get_gas(icall, 'CO2', pstate, pbuf, gas_mmr)
-   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdc
+   gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdc
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
    end if
 
    errmsg = gas_concs%set_vmr('co2', gas_vmr)
@@ -354,16 +372,20 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    ! O3
    call rad_cnst_get_gas(icall, 'O3',  pstate, pbuf, gas_mmr)
-   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdo
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdo
+   if (nlay == pverp) then
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
+   end if   
 
    errmsg = gas_concs%set_vmr('o3', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting O3: '//trim(errmsg))
 
    ! N2O
    call rad_cnst_get_gas(icall, 'N2O', pstate, pbuf, gas_mmr)
-   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdn
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdn
+   if (nlay == pverp) then
+      gas_vmr(:,1) = gas_vmr(:,1) 
+   end if
 
    errmsg = gas_concs%set_vmr('n2o', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting N2O: '//trim(errmsg))
@@ -376,16 +398,18 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    ! CH4
    call rad_cnst_get_gas(icall, 'CH4', pstate, pbuf, gas_mmr)
-   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdm
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdm
+   if (nlay == pverp) then
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
+   end if
 
    errmsg = gas_concs%set_vmr('ch4', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting CH4: '//trim(errmsg))
 
    ! O2
    call rad_cnst_get_gas(icall, 'O2',  pstate, pbuf, gas_mmr)
-   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdo2
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdo2
+   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,1) 
 
    errmsg = gas_concs%set_vmr('o2', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting O2: '//trim(errmsg))
@@ -397,14 +421,18 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
 
    call rad_cnst_get_gas(icall, 'CFC11', pstate, pbuf, gas_mmr)
-   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdc1
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdc1
+   if (nlay == pverp) then
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
+   end if
    errmsg = gas_concs%set_vmr('cfc11', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting CFC11: '//trim(errmsg))
 
    call rad_cnst_get_gas(icall, 'CFC12', pstate, pbuf, gas_mmr)
-   gas_vmr(:,:ktopradm) = gas_mmr(:ncol,pver:ktopcamm:-1)*amdc2
-   if (nlay == pverp) gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+   gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdc2
+   if (nlay == pverp) then
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
+   end if
    errmsg = gas_concs%set_vmr('cfc12', gas_vmr)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting CFC12: '//trim(errmsg))
 
@@ -454,11 +482,11 @@ subroutine rrtmgp_set_gases_sw( &
    call rad_cnst_get_gas(icall, 'H2O', pstate, pbuf, gas_mmr)
    do i = 1, nday
       ! water vapor represented as specific humidity in CAM
-      gas_vmr(i,:ktopradm) = (gas_mmr(idxday(i),pver:ktopcamm:-1) / &
-                             (1._r8 - gas_mmr(idxday(i),pver:ktopcamm:-1))) * amdw
+      gas_vmr(i,nlay+1-pver:) = (gas_mmr(idxday(i),:pver) / &
+                             (1._r8 - gas_mmr(idxday(i),:pver))) * amdw
    end do
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
    end if
    errmsg = gas_concs%set_vmr('h2o', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -468,10 +496,10 @@ subroutine rrtmgp_set_gases_sw( &
    ! CO2
    call rad_cnst_get_gas(icall, 'CO2', pstate, pbuf, gas_mmr)
    do i = 1, nday
-      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdc
+      gas_vmr(i,nlay+1-pver:) = gas_mmr(idxday(i),:pver)*amdc
    end do
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
    end if
    errmsg = gas_concs%set_vmr('co2', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -481,10 +509,10 @@ subroutine rrtmgp_set_gases_sw( &
    ! O3
    call rad_cnst_get_gas(icall, 'O3',  pstate, pbuf, gas_mmr)
    do i = 1, nday
-      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdo
+      gas_vmr(i,nlay+1-pver:) = gas_mmr(idxday(i), :pver)*amdo
    end do
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
    end if
    errmsg = gas_concs%set_vmr('o3', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -494,10 +522,10 @@ subroutine rrtmgp_set_gases_sw( &
    ! N2O
    call rad_cnst_get_gas(icall, 'N2O', pstate, pbuf, gas_mmr)
    do i = 1, nday
-      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdn
+      gas_vmr(i,nlay+1-pver:) = gas_mmr(idxday(i),:pver)*amdn
    end do
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm)
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver)
    end if 
    errmsg = gas_concs%set_vmr('n2o', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -514,10 +542,10 @@ subroutine rrtmgp_set_gases_sw( &
    ! CH4
    call rad_cnst_get_gas(icall, 'CH4', pstate, pbuf, gas_mmr)
    do i = 1, nday
-      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdm
+      gas_vmr(i,nlay+1-pver:) = gas_mmr(idxday(i), :pver)*amdm
    end do
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
    end if
    errmsg = gas_concs%set_vmr('ch4', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -527,10 +555,10 @@ subroutine rrtmgp_set_gases_sw( &
    ! O2
    call rad_cnst_get_gas(icall, 'O2',  pstate, pbuf, gas_mmr)
    do i = 1, nday
-      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i),pver:ktopcamm:-1)*amdo2
+      gas_vmr(i,nlay+1-pver:) = gas_mmr(idxday(i), :pver)*amdo2
    end do
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
    end if
    errmsg = gas_concs%set_vmr('o2', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -546,10 +574,10 @@ subroutine rrtmgp_set_gases_sw( &
 
    call rad_cnst_get_gas(icall, 'CFC11', pstate, pbuf, gas_mmr)
    do i = 1,nday
-      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i), pver:ktopcamm:-1) * amdc1
+      gas_vmr(i,nlay+1-pver:) = gas_mmr(idxday(i), :pver) * amdc1
    end do
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm)
+      gas_vmr(:,1) = gas_vmr(:,1)
    end if 
    errmsg = gas_concs%set_vmr('cfc11', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -558,10 +586,10 @@ subroutine rrtmgp_set_gases_sw( &
 
    call rad_cnst_get_gas(icall, 'CFC12', pstate, pbuf, gas_mmr)
    do i = 1,nday
-      gas_vmr(i,:ktopradm) = gas_mmr(idxday(i), pver:ktopcamm:-1) * amdc2
+      gas_vmr(i,nlay+1-pver:) = gas_mmr(idxday(i), :pver) * amdc2
    end do
    if (nlay == pverp) then
-      gas_vmr(:,nlay) = gas_vmr(:,ktopradm) 
+      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
    end if
    errmsg = gas_concs%set_vmr('cfc12', gas_vmr)
    if (len_trim(errmsg) > 0) then
@@ -608,10 +636,8 @@ subroutine rrtmgp_set_cloud_lw(state, nlwbands, cldfrac, c_cld_lw_abs, lwkDist, 
    ! If there is an extra layer in the radiation then this initialization
    ! will provide zero optical depths there.
    cloud_lw%tau = 0.0_r8
-
-   ! flip vertical ordering to match RRTMGP (from top-to-bottom in taucmcl to bottom-to-top in cloud_lw%tau)
    do i = 1, ngptlw
-      cloud_lw%tau(:,:ktopradm,i) = taucmcl(i,:,pver:ktopcamm:-1)
+      cloud_lw%tau(:ncol,:pver,i) = taucmcl(i,:ncol,:pver)
    end do
 
    deallocate(taucmcl)
@@ -635,9 +661,7 @@ subroutine rrtmgp_set_aer_lw(ncol, nlwbands, aer_lw_abs, aer_lw)
    ! If there is an extra layer in the radiation then this initialization
    ! will provide zero optical depths there.
    aer_lw%tau = 0.0_r8
-
-   ! Subset vertical layers and flip index ordering to match RRTMGP
-   aer_lw%tau(:,:ktopradm,:) = aer_lw_abs(:ncol,pver:ktopcamm:-1,:)
+   aer_lw%tau(:ncol,:pver,:) = aer_lw_abs(:ncol,:pver,:)
 
 
 end subroutine rrtmgp_set_aer_lw
@@ -728,22 +752,11 @@ subroutine rrtmgp_set_cloud_sw( &
       enddo
    enddo
 
-   print*,'--- IN rrtmgp_set_cloud_sw BEFORE mcica_subcol_sw ---'
-   do k=1,nver
-      print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUC)=",f12.6)', k, cldf(1,k),maxval(tauc(:,1,k))
-   end do
-
    ! mcica_subcol_sw converts to gpts (e.g., 224 pts instead of 14 bands)
    call mcica_subcol_sw( &
       kdist_sw, nswbands, ngptsw, nday, nlay, nver, changeseed, &
       pmid, cldf, tauc, ssac, asmc,     &
       taucmcl, ssacmcl, asmcmcl)
-
-   print*,'+++ IN rrtmgp_set_cloud_sw AFTER mcica_subcol_sw +++'
-   do k=1,nver
-      print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUCMCL)=",f12.6)', k, cldf(1,k),maxval(taucmcl(:,1,k))
-   end do
-   ! STILL GOOD
    
 
    ! If there is an extra layer in the radiation then this initialization
@@ -752,18 +765,11 @@ subroutine rrtmgp_set_cloud_sw( &
    cloud_sw%tau(:,:,:) = 0.0_r8
    cloud_sw%ssa(:,:,:) = 1.0_r8
    cloud_sw%g(:,:,:)   = 0.0_r8
-   ! flip vertical ordering from top-to-bottom to match RRTMGP bottom-to-top
+   
    do i = 1, ngptsw
-      cloud_sw%g  (:,:ktopradm,i) = asmcmcl(i,:,pver:ktopcamm:-1)
-      cloud_sw%ssa(:,:ktopradm,i) = ssacmcl(i,:,pver:ktopcamm:-1)
-      cloud_sw%tau(:,:ktopradm,i) = taucmcl(i,:,pver:ktopcamm:-1)
-   end do
-
-   print*,'[INFO] SHAPE OF taucmcl',shape(taucmcl),' SHAPE OF cloud_sw%tau: ',shape(cloud_sw%tau)
-
-   print*,'+++ IN rrtmgp_set_cloud_sw AFTER cloud_sw setting +++'
-   do k=1,nver
-      print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUCMCL)=",f12.6,2x," Max(cloud_sw%tau)= ",f12.6)', k, cldf(1,k),maxval(taucmcl(:,1,k)),maxval(cloud_sw%tau(1,k,:))
+      cloud_sw%g  (:nday,:nver,i) = asmcmcl(i,:nday,:nver)
+      cloud_sw%ssa(:nday,:nver,i) = ssacmcl(i,:nday,:nver)
+      cloud_sw%tau(:nday,:nver,i) = taucmcl(i,:nday,:nver)
    end do
 
    ! delta scaling adjusts for forward scattering
@@ -795,8 +801,10 @@ subroutine rrtmgp_set_aer_sw( &
    !
    ! *** N.B. *** The input optical arrays from CAM are dimensioned in the vertical
    !              as 0:pver.  The index 0 is for the extra layer used in the radiation
-   !              calculation.  The bottom layer is index pver which corresponds to
-   !              index 1 in the RRTMGP arrays.
+   !              calculation.  
+   !              The bottom layer is index pver which corresponds to
+   !              index 1 in the RRTMGP arrays if kstride == -1 (i.e., reverse_rad_levels == .true.)
+   !
 
    ! arguments
    integer,   intent(in) :: nswbands
@@ -823,33 +831,49 @@ subroutine rrtmgp_set_aer_sw( &
    ! Rearrange the aerosol optics data directly into the aer_sw object.
    ! Both the subsetting of layers used in the SW calculation, and reversing
    ! the indexing are done here.
+      ! do ns = 1, nswbands
+      !    do k = 1, ktopradm
+      !       ! CAM uses opposite vertical ordering of RRTMGP.  The following
+      !       ! code subsets the vertical layers used in the SW calculation by
+      !       ! starting in the bottom layer and moving up.  It works for
+      !       ! either the case where CAM uses an extra layer above the model
+      !       ! top, or when the radiation calculation doesn't go all the way
+      !       ! to the top of CAM (e.g. in WACCM configurations).
+      !       kk = pver - k + 1
 
+      !       do i = 1, nday
+
+      !          if (aer_tau_w(idxday(i),kk,ns) > 1.e-80_r8) then
+
+      !             aer_sw%g(i,k,ns) = aer_tau_w_g(idxday(i),kk,ns) / &
+      !                               aer_tau_w  (idxday(i),kk,ns)
+      !          end if
+
+      !          if (aer_tau(idxday(i),kk,ns) > 0._r8) then
+
+      !             aer_sw%ssa(i,k,ns) = aer_tau_w(idxday(i),kk,ns) / &
+      !                                  aer_tau  (idxday(i),kk,ns)
+
+      !             aer_sw%tau(i,k,ns) = aer_tau(idxday(i),kk,ns)
+      !          end if
+
+      !       end do
+      !    end do
+      ! end do
+   ! ASSUME CAM and RAD grids are in same direction:
    do ns = 1, nswbands
       do k = 1, ktopradm
-         ! CAM uses opposite vertical ordering of RRTMGP.  The following
-         ! code subsets the vertical layers used in the SW calculation by
-         ! starting in the bottom layer and moving up.  It works for
-         ! either the case where CAM uses an extra layer above the model
-         ! top, or when the radiation calculation doesn't go all the way
-         ! to the top of CAM (e.g. in WACCM configurations).
-         kk = pver - k + 1
-
-         do i = 1, nday
-
-            if (aer_tau_w(idxday(i),kk,ns) > 1.e-80_r8) then
-
-               aer_sw%g(i,k,ns) = aer_tau_w_g(idxday(i),kk,ns) / &
-                                  aer_tau_w  (idxday(i),kk,ns)
+         do i = 1,nday
+            if (aer_tau_w(idxday(i),k,ns) > 1.e-80_r8) then
+               aer_sw%g(i,k,ns) = aer_tau_w_g(idxday(i),k,ns) / &
+                                    aer_tau_w  (idxday(i),k,ns)
             end if
+            if (aer_tau(idxday(i),k,ns) > 0._r8) then
+               aer_sw%ssa(i,k,ns) = aer_tau_w(idxday(i),k,ns) / &
+                                    aer_tau  (idxday(i),k,ns)
 
-            if (aer_tau(idxday(i),kk,ns) > 0._r8) then
-
-               aer_sw%ssa(i,k,ns) = aer_tau_w(idxday(i),kk,ns) / &
-                                    aer_tau  (idxday(i),kk,ns)
-
-               aer_sw%tau(i,k,ns) = aer_tau(idxday(i),kk,ns)
+               aer_sw%tau(i,k,ns) = aer_tau(idxday(i),k,ns)
             end if
-
          end do
       end do
    end do
