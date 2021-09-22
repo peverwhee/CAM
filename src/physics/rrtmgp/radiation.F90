@@ -970,7 +970,7 @@ subroutine radiation_tend( &
    integer :: iband
    integer :: nlevcam, nlevrad
 
-   logical :: sad_debugging = .false.
+   logical :: sad_debugging = .true.
    !--------------------------------------------------------------------------------------
    lchnk = state%lchnk
    ncol = state%ncol
@@ -1478,6 +1478,17 @@ subroutine radiation_tend( &
                   print*, 'ERROR return from rte_sw at lchnk=', lchnk
                   call endrun(sub//': ERROR code returned by rte_sw: '//trim(errmsg))
                end if
+
+               if (sad_debugging) then
+                  ! bpm -- debugging -- 
+                  print*,'--- Right after rte_sw --- (dosw = ',dosw,')(ktopradi = ',ktopradi,') nstep = ',get_nstep()
+                  do k=1,size(fsw%flux_net,2)
+                     print '("LEVEL",i2,3x," SW_NET = ",f12.4," SW_NET_CLR = ",f12.4)', k,fsw%flux_net(1,k),fswc%flux_net(1,k)
+                  end do
+               end if
+               call t_startf('rad_sw')
+
+
                call t_stopf('rad_sw')
 
                !
@@ -1487,7 +1498,12 @@ subroutine radiation_tend( &
                ! Transform RRTMGP outputs to CAM outputs
                ! - including fsw (W/m2) -> qrs (J/(kgK))
                call set_sw_diags()
-
+               if (sad_debugging) then
+                  print*,'--- Right after set_sw_diags --- (dosw = ',dosw,')(ktopradi = ',ktopradi,') nstep = ',get_nstep()
+                  do k=1,size(qrs,2)
+                     print '("LEVEL",i2,3x," QRS = ",f12.4," QRSC = ",f12.4)', k, qrs(1,k), rd%qrsc(i,k)
+                  end do
+               end if
                if (write_output) then
                   call radiation_output_sw(lchnk, ncol, icall, rd, pbuf, cam_out)  ! QRS = qrs/cpair; whatever qrs is in pbuf
                end if
@@ -1766,15 +1782,9 @@ contains
       fns  = 0._r8 ! net sw flux
       fcns = 0._r8 ! net sw clearsky flux
 
-      ! reverse fluxes when necessary...
-      ! OLD: fsw is expected to be bottom-to-top, so fns becomes top-to-bottom
-      ! NEW: fluxes are on CAM grid if reverse_rad_levels is FALSE
-      !      otherwise need to be reversed
       do i = 1, nday
-         fns(idxday(i),ktopcami:pverp)  = &
-             fsw%flux_net(i,ktopradi:kbotradi:kstride) ! flux_dn - fsw%flux_up(i,ktopradi:1:-1)
-         fcns(idxday(i),ktopcami:pverp) = &
-             fswc%flux_net(i,ktopradi:kbotradi:kstride) ! flux_dn - fswc%flux_up(i,ktopradi:1:-1)
+         fns(idxday(i),ktopcami:pverp)  = fsw%flux_net(i, ktopradi:pverp)
+         fcns(idxday(i),ktopcami:pverp) = fswc%flux_net(i,ktopradi:pverp)
          rd%flux_sw_up(idxday(i),ktopcami:pverp) = &
              fsw%flux_up(i,ktopradi:kbotradi:kstride)
          rd%flux_sw_dn(idxday(i),ktopcami:pverp) = &
@@ -1874,8 +1884,9 @@ contains
       fnl = 0._r8
       fcnl = 0._r8
 
-      fnl(:ncol,ktopcami:pverp)  = flw%flux_net(:,ktopradi:kbotradi:kstride)
-      fcnl(:ncol,ktopcami:pverp) = flwc%flux_net(:,ktopradi:kbotradi:kstride)
+      ! RTE-RRTMGP convention for net is (down - up) **CAM assumes (down - up) !!
+      fnl(:ncol,ktopcami:pverp)  = -1._r8 * flw%flux_net(:,ktopradi:pverp)
+      fcnl(:ncol,ktopcami:pverp) = -1._r8 * flwc%flux_net(:,ktopradi:pverp)
       rd%flux_lw_up(:ncol,ktopcami:pverp)     = flw%flux_up(:,ktopradi:kbotradi:kstride)
       rd%flux_lw_clr_up(:ncol,ktopcami:pverp) = flwc%flux_up(:,ktopradi:kbotradi:kstride)
       rd%flux_lw_dn(:ncol,ktopcami:pverp)     = flw%flux_dn(:,ktopradi:kbotradi:kstride)
