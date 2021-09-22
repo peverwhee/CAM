@@ -1887,10 +1887,10 @@ contains
       ! RTE-RRTMGP convention for net is (down - up) **CAM assumes (down - up) !!
       fnl(:ncol,ktopcami:pverp)  = -1._r8 * flw%flux_net(:,ktopradi:pverp)
       fcnl(:ncol,ktopcami:pverp) = -1._r8 * flwc%flux_net(:,ktopradi:pverp)
-      rd%flux_lw_up(:ncol,ktopcami:pverp)     = flw%flux_up(:,ktopradi:kbotradi:kstride)
-      rd%flux_lw_clr_up(:ncol,ktopcami:pverp) = flwc%flux_up(:,ktopradi:kbotradi:kstride)
-      rd%flux_lw_dn(:ncol,ktopcami:pverp)     = flw%flux_dn(:,ktopradi:kbotradi:kstride)
-      rd%flux_lw_clr_dn(:ncol,ktopcami:pverp) = flwc%flux_dn(:,ktopradi:kbotradi:kstride)
+      rd%flux_lw_up(:ncol,ktopcami:pverp)     = flw%flux_up(:,ktopradi:pverp)
+      rd%flux_lw_clr_up(:ncol,ktopcami:pverp) = flwc%flux_up(:,ktopradi:pverp)
+      rd%flux_lw_dn(:ncol,ktopcami:pverp)     = flw%flux_dn(:,ktopradi:pverp)
+      rd%flux_lw_clr_dn(:ncol,ktopcami:pverp) = flwc%flux_dn(:,ktopradi:pverp)
 
       call heating_rate('LW', ncol, fnl, qrl)
       call heating_rate('LW', ncol, fcnl, rd%qrlc)
