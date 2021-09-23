@@ -1485,6 +1485,12 @@ subroutine radiation_tend( &
                   do k=1,size(fsw%flux_net,2)
                      print '("LEVEL",i2,3x," SW_NET = ",f12.4," SW_NET_CLR = ",f12.4)', k,fsw%flux_net(1,k),fswc%flux_net(1,k)
                   end do
+                  do k=1,size(fsw%flux_net,2)
+                     print '("LEVEL",i2,3x," SW_DOWN = ",f12.4," SW_DOWN_CLR = ",f12.4)', k,fsw%flux_dn(1,k),fswc%flux_dn(1,k)
+                  end do
+                  do k=1,size(fsw%flux_net,2)
+                     print '("LEVEL",i2,3x," SW_UP = ",f12.4," SW_UP_CLR = ",f12.4)', k,fsw%flux_up(1,k),fswc%flux_up(1,k)
+                  end do
                end if
                call t_startf('rad_sw')
 
@@ -1618,10 +1624,6 @@ subroutine radiation_tend( &
          if (len_trim(errmsg) > 0) then
             call endrun(sub//': ERROR: aer_lw%init_1scalar: '//trim(errmsg))
          end if
-
-         ! allocate output storage and associate it with object components
-         ! call initialize_rrtmgp_fluxes(ncol, nlay+1, nlwbands, flw)
-         ! call initialize_rrtmgp_fluxes(ncol, nlay+1, nlwbands, flwc)
 
          call rad_cnst_get_call_list(active_calls) ! get list of diagnostic calls
 
@@ -2748,21 +2750,24 @@ end subroutine set_available_gases
 
 subroutine reset_fluxes(fluxes)
 
-   use mo_rte_kind, only: wp  ! same as r8
    use mo_fluxes_byband, only: ty_fluxes_byband
    type(ty_fluxes_byband), intent(inout) :: fluxes
 
    ! Reset broadband fluxes
-   fluxes%flux_up(:,:) = 0._wp
-   fluxes%flux_dn(:,:) = 0._wp
-   fluxes%flux_net(:,:) = 0._wp
-   if (associated(fluxes%flux_dn_dir)) fluxes%flux_dn_dir(:,:) = 0._wp
+   fluxes%flux_up(:,:) = 0._r8
+   fluxes%flux_dn(:,:) = 0._r8
+   fluxes%flux_net(:,:) = 0._r8
+   if (associated(fluxes%flux_dn_dir)) then
+      fluxes%flux_dn_dir(:,:) = 0._r8
+   end if
 
    ! Reset band-by-band fluxes
-   fluxes%bnd_flux_up(:,:,:) = 0._wp
-   fluxes%bnd_flux_dn(:,:,:) = 0._wp
-   fluxes%bnd_flux_net(:,:,:) = 0._wp
-   if (associated(fluxes%bnd_flux_dn_dir)) fluxes%bnd_flux_dn_dir(:,:,:) = 0._wp
+   fluxes%bnd_flux_up(:,:,:) = 0._r8
+   fluxes%bnd_flux_dn(:,:,:) = 0._r8
+   fluxes%bnd_flux_net(:,:,:) = 0._r8
+   if (associated(fluxes%bnd_flux_dn_dir)) then
+      fluxes%bnd_flux_dn_dir(:,:,:) = 0._r8
+   end if
 
 end subroutine reset_fluxes
 

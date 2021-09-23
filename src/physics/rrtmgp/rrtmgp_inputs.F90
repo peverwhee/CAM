@@ -772,19 +772,24 @@ subroutine rrtmgp_set_cloud_sw( &
       cloud_sw%tau(:nday,:nver,i) = taucmcl(i,:nday,:nver)
    end do
 
+   errmsg = cloud_sw%validate()
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': ERROR: cloud_sw%validate: '//trim(errmsg))
+   end if
+
    ! delta scaling adjusts for forward scattering
    ! If delta_scale() is applied, cloud_sw%tau differs from RRTMG implementation going into SW calculation.   
-   ! errmsg = cloud_sw%delta_scale()
-   ! if (len_trim(errmsg) > 0) then
-   !    call endrun(sub//': ERROR: cloud_sw%delta_scale: '//trim(errmsg))
-   ! end if
+   errmsg = cloud_sw%delta_scale()
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': ERROR: cloud_sw%delta_scale: '//trim(errmsg))
+   end if
 
    ! print*,'+++ IN rrtmgp_set_cloud_sw AFTER delta_scale setting +++'
    ! do k=1,nver
    !    print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUCMCL)=",f12.6,2x," Max(cloud_sw%tau)= ",f12.6)', k, cldf(1,k),maxval(taucmcl(:,1,k)),maxval(cloud_sw%tau(1,k,:))
    ! end do
 
-   
+   ! all information is in cloud_sw, now deallocate
    deallocate( &
       cldf, tauc, ssac, asmc, &
       taucmcl, ssacmcl, asmcmcl )
