@@ -66,38 +66,21 @@ integer :: ktopradm ! rrtmgp index of layer corresponding to ktopcamm
 integer :: ktopcami ! cam index of top interface
 integer :: ktopradi ! rrtmgp index of interface corresponding to ktopcami
 
-integer :: kbotcamm ! cam index of top layer
-integer :: kbotradm ! rrtmgp index of layer corresponding to ktopcamm
-integer :: kbotcami ! cam index of top interface
-integer :: kbotradi ! rrtmgp index of interface corresponding to ktopcami
-integer :: kstride ! stride for vertical level operations (-1 or 1)
-
 !==================================================================================================
 contains
 !==================================================================================================
 
-subroutine rrtmgp_inputs_init(ktcamm, ktradm, ktcami, ktradi, kbcamm, kbcami, kbradm, kbradi, ks)
+subroutine rrtmgp_inputs_init(ktcamm, ktradm, ktcami, ktradi)
       
    integer, intent(in) :: ktcamm
    integer, intent(in) :: ktradm
    integer, intent(in) :: ktcami
    integer, intent(in) :: ktradi
-   integer, intent(in) :: kbcamm
-   integer, intent(in) :: kbradm
-   integer, intent(in) :: kbcami
-   integer, intent(in) :: kbradi
-   integer, intent(in) :: ks
-   !--------------------------------------------------------------------------------
 
    ktopcamm = ktcamm
    ktopradm = ktradm
    ktopcami = ktcami
    ktopradi = ktradi
-   kbotcamm = ktcamm
-   kbotradm = ktradm
-   kbotcami = ktcami
-   kbotradi = ktradi
-   kstride = ks
 
 end subroutine rrtmgp_inputs_init
 
@@ -618,6 +601,8 @@ subroutine rrtmgp_set_cloud_lw(state, nlwbands, cldfrac, c_cld_lw_abs, lwkDist, 
    integer :: ncol
    integer :: ngptlw
    real(r8), allocatable :: taucmcl(:,:,:) ! cloud optical depth [mcica]
+   character(len=32)  :: sub = 'rrtmgp_set_cloud_lw'
+   character(len=128) :: errmsg
    !--------------------------------------------------------------------------------
 
    ncol   = state%ncol
@@ -630,16 +615,27 @@ subroutine rrtmgp_set_cloud_lw(state, nlwbands, cldfrac, c_cld_lw_abs, lwkDist, 
    !         to subset cldfrac and c_cld_lw_abs to avoid computing unneeded random numbers.
    
    call mcica_subcol_lw( &
-      lwkdist, nlwbands, ngptlw, ncol, ngptlw, &
-      state%pmid, cldfrac, c_cld_lw_abs, taucmcl)
+      lwkdist,      & ! spectral information
+      nlwbands,     & ! number of spectral bands
+      ngptlw,       & ! number of subcolumns (g-point intervals)
+      ncol,         & ! number of columns
+      ngptlw,       & ! changeseed, should be set to number of subcolumns
+      state%pmid,   & ! layer pressures (Pa)
+      cldfrac,      & ! layer cloud fraction
+      c_cld_lw_abs, & ! cloud optical depth
+      taucmcl       & ! OUTPUT: subcolumn cloud optical depth [mcica] (ngpt, ncol, nver)
+      )
 
    ! If there is an extra layer in the radiation then this initialization
    ! will provide zero optical depths there.
    cloud_lw%tau = 0.0_r8
    do i = 1, ngptlw
-      cloud_lw%tau(:ncol,:pver,i) = taucmcl(i,:ncol,:pver)
+      cloud_lw%tau(:ncol, ktopradm:, i) = taucmcl(i, :ncol, ktopcamm:)
    end do
-
+   errmsg = cloud_lw%validate()
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': ERROR: cloud_sw%validate: '//trim(errmsg))
+   end if
    deallocate(taucmcl)
 
 end subroutine rrtmgp_set_cloud_lw
@@ -661,7 +657,7 @@ subroutine rrtmgp_set_aer_lw(ncol, nlwbands, aer_lw_abs, aer_lw)
    ! If there is an extra layer in the radiation then this initialization
    ! will provide zero optical depths there.
    aer_lw%tau = 0.0_r8
-   aer_lw%tau(:ncol,:pver,:) = aer_lw_abs(:ncol,:pver,:)
+   aer_lw%tau(:ncol, ktopradm:, :) = aer_lw_abs(:ncol, ktopcamm:, :)
 
 
 end subroutine rrtmgp_set_aer_lw
@@ -694,7 +690,7 @@ subroutine rrtmgp_set_cloud_sw( &
    ! local vars
    integer, parameter :: changeseed = 1
 
-   integer :: i, k, kk, ns
+   integer :: i, k, kk, ns, igpt
    integer :: ngptsw
    integer :: nver       ! nver is the number of cam layers in the SW calc.  It
                          ! does not include the "extra layer".
@@ -709,10 +705,13 @@ subroutine rrtmgp_set_cloud_sw( &
 
    character(len=32)  :: sub = 'rrtmgp_set_cloud_sw'
    character(len=128) :: errmsg
+   real(r8) :: small_val = 1.e-80_r8
+   real(r8), allocatable :: day_cld_tau(:,:,:)
+   real(r8), allocatable :: day_cld_tau_w(:,:,:)
+   real(r8), allocatable :: day_cld_tau_w_g(:,:,:)
    !--------------------------------------------------------------------------------
-
    ngptsw = kdist_sw%get_ngpt()
-   nver   = pver - ktopcamm + 1
+   nver   = pver - ktopcamm + 1 ! number of CAM's layers in radiation calculation. 
 
    ! Compute the input quantities needed for the 2-stream optical props
    ! object.  Also subset the vertical levels and the daylight columns
@@ -725,52 +724,44 @@ subroutine rrtmgp_set_cloud_sw( &
       asmc(nswbands,nday,nver),  &
       taucmcl(ngptsw,nday,nver), &
       ssacmcl(ngptsw,nday,nver), &
-      asmcmcl(ngptsw,nday,nver)  )
-   do i = 1, nday
-      k = 0
-      do kk = ktopcamm, pver
-         k = k + 1
-         cldf(i,k) = cldfrac(idxday(i),kk)
-         do ns = 1, nswbands
-            if (c_cld_tau_w(ns,IdxDay(i),kk) > 0._r8) then
-               asmc(ns,i,k) =     c_cld_tau_w_g(ns,idxday(i),kk) / &
-                              max(c_cld_tau_w  (ns,idxday(i),kk), 1.e-80_r8)
-            else
-               asmc(ns,i,k) = 0._r8
-            endif
-   
-            tauc(ns,i,k) = c_cld_tau(ns,idxday(i),kk)
-            if (tauc(ns,i,k) > 0._r8) then
-               ssac(ns,i,k) = max(c_cld_tau_w(ns,idxday(i),kk), 1.e-80_r8) / &
-                              max(tauc(ns,i,k), 1.e-80_r8)
-            else
-               tauc(ns,i,k) = 0._r8
-               asmc(ns,i,k) = 0._r8
-               ssac(ns,i,k) = 1._r8
-            endif
-         enddo
-      enddo
-   enddo
+      asmcmcl(ngptsw,nday,nver), &
+      day_cld_tau(nswbands,nday,nver),     &
+      day_cld_tau_w(nswbands,nday,nver),   &
+      day_cld_tau_w_g(nswbands,nday,nver))
+
+   ! get daylit arrays on radiation levels
+   day_cld_tau     = c_cld_tau(    :, idxday, ktopcamm:)
+   day_cld_tau_w   = c_cld_tau_w(  :, idxday, ktopcamm:)
+   day_cld_tau_w_g = c_cld_tau_w_g(:, idxday, ktopcamm:)
+   cldf = cldfrac(idxday, ktopcamm:)  ! daylit cloud fraction on radiation levels
+   tauc = merge(day_cld_tau, 0.0_r8, day_cld_tau > 0.0_r8)  ! start by setting cloud optical depth, clip @ zero
+   asmc = merge(day_cld_tau_w_g / max(day_cld_tau_w, small_val), 0.0_r8, day_cld_tau_w > 0.0_r8)  ! set value of asymmetry
+   ssac = merge(max(day_cld_tau_w, small_val) / max(tauc, small_val), 1.0_r8 , tauc > 0.0_r8)
+   asmc = merge(asmc, 0.0_r8, tauc > 0.0_r8) ! double-check asymmetry; reset when tauc = 0
+
 
    ! mcica_subcol_sw converts to gpts (e.g., 224 pts instead of 14 bands)
+   ! inputs (pmid, cldf, tauc, ssac, asmc) and outputs (taucmcl, ssacmcl, asmcmcl)
+   ! are on the same nver vertical levels
+   ! output is shape (ngpt, ncol, nver)
    call mcica_subcol_sw( &
-      kdist_sw, nswbands, ngptsw, nday, nlay, nver, changeseed, &
-      pmid, cldf, tauc, ssac, asmc,     &
-      taucmcl, ssacmcl, asmcmcl)
+         kdist_sw, nswbands, ngptsw, nday, nlay, nver, changeseed, &
+         pmid, cldf, tauc, ssac, asmc,     &
+         taucmcl, ssacmcl, asmcmcl) ! 32
    
 
    ! If there is an extra layer in the radiation then this initialization
    ! will provide the optical properties there.
-   ! These should be shape (ncol, nlay, ngpt)
+   ! These should be shape (ncol, nlay, ngpt); assign levels using ktopradm+k, should 
    cloud_sw%tau(:,:,:) = 0.0_r8
    cloud_sw%ssa(:,:,:) = 1.0_r8
    cloud_sw%g(:,:,:)   = 0.0_r8
-   
-   do i = 1, ngptsw
-      cloud_sw%g  (:nday,:nver,i) = asmcmcl(i,:nday,:nver)
-      cloud_sw%ssa(:nday,:nver,i) = ssacmcl(i,:nday,:nver)
-      cloud_sw%tau(:nday,:nver,i) = taucmcl(i,:nday,:nver)
+   do igpt = 1,ngptsw
+      cloud_sw%g  (:, ktopradm:, igpt) = asmcmcl(igpt, ktopcamm:, :)
+      cloud_sw%ssa(:, ktopradm:, igpt) = ssacmcl(igpt, ktopcamm:, :)
+      cloud_sw%tau(:, ktopradm:, igpt) = taucmcl(igpt, ktopcamm:, :)
    end do
+
 
    errmsg = cloud_sw%validate()
    if (len_trim(errmsg) > 0) then
@@ -784,15 +775,11 @@ subroutine rrtmgp_set_cloud_sw( &
       call endrun(sub//': ERROR: cloud_sw%delta_scale: '//trim(errmsg))
    end if
 
-   ! print*,'+++ IN rrtmgp_set_cloud_sw AFTER delta_scale setting +++'
-   ! do k=1,nver
-   !    print '("LEVEL",i2,3x,"cldf = ",f12.6,2x," Max(TAUCMCL)=",f12.6,2x," Max(cloud_sw%tau)= ",f12.6)', k, cldf(1,k),maxval(taucmcl(:,1,k)),maxval(cloud_sw%tau(1,k,:))
-   ! end do
-
    ! all information is in cloud_sw, now deallocate
    deallocate( &
       cldf, tauc, ssac, asmc, &
-      taucmcl, ssacmcl, asmcmcl )
+      taucmcl, ssacmcl, asmcmcl,&
+      day_cld_tau, day_cld_tau_w, day_cld_tau_w_g )
 
 end subroutine rrtmgp_set_cloud_sw
 
@@ -807,9 +794,7 @@ subroutine rrtmgp_set_aer_sw( &
    ! *** N.B. *** The input optical arrays from CAM are dimensioned in the vertical
    !              as 0:pver.  The index 0 is for the extra layer used in the radiation
    !              calculation.  
-   !              The bottom layer is index pver which corresponds to
-   !              index 1 in the RRTMGP arrays if kstride == -1 (i.e., reverse_rad_levels == .true.)
-   !
+
 
    ! arguments
    integer,   intent(in) :: nswbands
@@ -832,56 +817,10 @@ subroutine rrtmgp_set_aer_sw( &
    aer_sw%ssa = 1.0_r8
    aer_sw%g   = 0.0_r8
 
-
-   ! Rearrange the aerosol optics data directly into the aer_sw object.
-   ! Both the subsetting of layers used in the SW calculation, and reversing
-   ! the indexing are done here.
-      ! do ns = 1, nswbands
-      !    do k = 1, ktopradm
-      !       ! CAM uses opposite vertical ordering of RRTMGP.  The following
-      !       ! code subsets the vertical layers used in the SW calculation by
-      !       ! starting in the bottom layer and moving up.  It works for
-      !       ! either the case where CAM uses an extra layer above the model
-      !       ! top, or when the radiation calculation doesn't go all the way
-      !       ! to the top of CAM (e.g. in WACCM configurations).
-      !       kk = pver - k + 1
-
-      !       do i = 1, nday
-
-      !          if (aer_tau_w(idxday(i),kk,ns) > 1.e-80_r8) then
-
-      !             aer_sw%g(i,k,ns) = aer_tau_w_g(idxday(i),kk,ns) / &
-      !                               aer_tau_w  (idxday(i),kk,ns)
-      !          end if
-
-      !          if (aer_tau(idxday(i),kk,ns) > 0._r8) then
-
-      !             aer_sw%ssa(i,k,ns) = aer_tau_w(idxday(i),kk,ns) / &
-      !                                  aer_tau  (idxday(i),kk,ns)
-
-      !             aer_sw%tau(i,k,ns) = aer_tau(idxday(i),kk,ns)
-      !          end if
-
-      !       end do
-      !    end do
-      ! end do
-   ! ASSUME CAM and RAD grids are in same direction:
-   do ns = 1, nswbands
-      do k = 1, ktopradm
-         do i = 1,nday
-            if (aer_tau_w(idxday(i),k,ns) > 1.e-80_r8) then
-               aer_sw%g(i,k,ns) = aer_tau_w_g(idxday(i),k,ns) / &
-                                    aer_tau_w  (idxday(i),k,ns)
-            end if
-            if (aer_tau(idxday(i),k,ns) > 0._r8) then
-               aer_sw%ssa(i,k,ns) = aer_tau_w(idxday(i),k,ns) / &
-                                    aer_tau  (idxday(i),k,ns)
-
-               aer_sw%tau(i,k,ns) = aer_tau(idxday(i),k,ns)
-            end if
-         end do
-      end do
-   end do
+   ! aer_sw is on RAD grid, aer_tau* is on CAM grid ... to make sure they align, use ktop*
+   aer_sw%tau(idxday, ktopradm:, :) = max(aer_tau(idxday, ktopcamm:, :), 0._r8)
+   aer_sw%ssa(idxday, ktopradm:, :) = merge(aer_tau_w(idxday, ktopcamm:,:)/aer_tau(idxday, ktopcamm:, :), 1._r8, aer_tau(idxday, ktopcamm:, :) > 0._r8)
+   aer_sw%g(  idxday, ktopradm:, :) = merge(aer_tau_w_g(idxday, ktopcamm:, :) / aer_tau_w(idxday, ktopcamm:, :), 0._r8, aer_tau_w(idxday, ktopcamm:, :) > 1.e-80_r8)
 
 end subroutine rrtmgp_set_aer_sw
 

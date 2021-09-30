@@ -175,15 +175,6 @@ integer :: ktopradm ! rrtmgp index of layer corresponding to ktopcamm
 integer :: ktopcami ! cam index of top interface
 integer :: ktopradi ! rrtmgp index of interface corresponding to ktopcami
 
-logical :: reverse_rad_levels = .false.  ! try to use CAM ordering all the way through ; RRTMGP is agnostic to level order. IF .true. DO reverse things, if .false. do NOT.
-
-! BPM -- Try to be general ... what is the best way to deal with the CAM and RAD vertical grids? 
-! reverse_rad_levels decides how to set ktop*
-! I'm also adding the corresponding kbot*
-! That also determines kstride ==> 1 if they are in same direction, -1 if they are opposite.
-! use kbot* and ktop* and kstride AND ALWAYS index levels using them, in whatever order is needed for the convention being used.
-integer :: kbotcamm, kbotcami, kbotradm, kbotradi, kstride
-
 ! LW coefficients
 type(ty_gas_optics_rrtmgp) :: kdist_lw ! bpm changed here
 integer :: ngpt_lw
@@ -197,7 +188,7 @@ integer :: ngpt_sw
 ! RRTMGP kdist initialization needs to know the names of the
 ! gases before these are available via the rad_cnst interface. 
 ! TODO: Move this to namelist or somewhere appropriate.
-! NOTE: This list is not the same as `gaslist` in radconstants; is that a problem?
+! NOTE: This list is not the same as `gaslist` in radconstants; is that a problem? Implication for diagnostic calls?
 character(len=5), dimension(10) :: active_gases = (/ &
 'H2O  ', 'CO2  ', 'O3   ', 'N2O  ', &
 'CO   ', 'CH4  ', 'O2   ', 'N2   ', &
@@ -227,10 +218,7 @@ subroutine radiation_readnl(nlfile)
    character(len=*), parameter :: subroutine_name = 'radiation_readnl'
 
    character(len=cl) :: rrtmgp_coefs_lw_file, rrtmgp_coefs_sw_file
-   ! integer :: iradsw, iradlw, irad_always
-   ! logical :: use_rad_dt_cosz, spectralflux
-   ! logical :: use_rad_uniform_angle
-   ! real    :: rad_uniform_angle
+
 
    namelist /radiation_nl/ rrtmgp_coefs_lw_file,         &
                         rrtmgp_coefs_sw_file,         &
@@ -288,14 +276,6 @@ subroutine radiation_readnl(nlfile)
    ! Set module data
    coefs_lw_file   = rrtmgp_coefs_lw_file
    coefs_sw_file   = rrtmgp_coefs_sw_file
-   ! iradsw          = rrtmgp_iradsw
-   ! iradlw          = rrtmgp_iradlw
-   ! irad_always     = rrtmgp_irad_always
-   ! use_rad_dt_cosz = rrtmgp_use_rad_dt_cosz
-   ! spectralflux    = rrtmgp_spectralflux
-   ! use_rad_uniform_angle = rrtmgp_use_rad_uniform_angle
-   ! rad_uniform_angle = rrtmgp_rad_uniform_angle
-   ! graupel_in_rad already named correctly.
 
    ! Convert iradsw, iradlw and irad_always from hours to timesteps if necessary
    dtime  = get_step_size()
@@ -475,37 +455,33 @@ subroutine radiation_init(pbuf2d)
    ! the purpose of the radiation calculation.
    nlay = count( pref_edge(:) > 1._r8 ) ! pascals (0.01 mbar)
 
+   ! Use k*rad* to access variables ON THE RADIATION GRID
+   ! Use k*cam* to access variables ON THE CAM GRID
    if (nlay == pverp) then
-         ktopcamm = 1
-         ktopradm = nlay + 1 - pver
-         ktopcami = 1
+         ktopcamm = 1               ! interpretation: highest CAM grid layer at which radiation is active
+         ktopcami = 1 
+         ktopradm = nlay + 1 - pver ! radiation grid layer the corresponds to CAM's highest layer (expected to be 2)
          ktopradi = nlay + 1 - pver
-         kbotcamm = pver
-         kbotcami = pverp
-         kbotradm = pver
-         kbotradi = pverp
    else ! nlay < pverp
       ! nlay layers are set by radiation
       ! nlay+1 interfaces are set by radiation
-      ktopcamm = pverp - nlay
-      ktopcami = pverp - nlay
-      kbotcamm = pver
-      kbotcami = pverp
-      ktopradm = pverp - nlay ! top to bottom, so top is at same place as for CAM's interface
-      ktopradi = pverp - nlay ! top to bottom, last interface is one less (higher) than CAM's
+      ktopcamm = pverp - nlay + 1
+      ktopcami = pverp - nlay + 1
+      ktopradm = 1  ! radiation grid index at top is just 1
+      ktopradi = 1
    end if
-   if (reverse_rad_levels) then
-      kstride = -1
-   else
-      kstride = 1
-   end if
+   ! bottom indices are known, so we don't need to have extra variables.
+   ! kbotcamm = pver
+   ! kbotcami = pverp
+   ! kbotradm = nlay
+   ! kbotradi = nlay + 1
 
 
    call set_available_gases(active_gases, available_gases) ! gases needed to initialize spectral info
 
    ! initialize relevant data
    ! call rad_solar_var_init() ! Not needed w/ RRTMGP
-   call rrtmgp_inputs_init(ktopcamm, ktopradm, ktopcami, ktopradi, kbotcamm, kbotcami, kbotradm, kbotradi, kstride) ! this sets these values as module data in rrtmgp_inputs
+   call rrtmgp_inputs_init(ktopcamm, ktopradm, ktopcami, ktopradi) ! this sets these values as module data in rrtmgp_inputs
 
    call coefs_init(coefs_lw_file, kdist_lw, available_gases)
    call coefs_init(coefs_sw_file, kdist_sw, available_gases)
@@ -924,7 +900,7 @@ subroutine radiation_tend( &
    real(r8) :: c_cld_tau_w_f(nswbands,pcols,pver) ! combined cloud forward scattered fraction * w * tau
    real(r8) :: c_cld_lw_abs (nlwbands,pcols,pver) ! combined cloud absorption optics depth (LW)
 
-   ! Aerosol radiative properties
+   ! Aerosol radiative properties **N.B.** These are zero-indexed to be on RADIATION GRID (assumes "extra layer" is being added?)
    real(r8) :: aer_tau    (pcols,0:pver,nswbands) ! aerosol extinction optical depth
    real(r8) :: aer_tau_w  (pcols,0:pver,nswbands) ! aerosol single scattering albedo * tau
    real(r8) :: aer_tau_w_g(pcols,0:pver,nswbands) ! aerosol assymetry parameter * w * tau
@@ -934,7 +910,6 @@ subroutine radiation_tend( &
    ! RRTMGP cloud objects (McICA sampling of cloud optical properties)
    type(ty_optical_props_1scl) :: cloud_lw
    type(ty_optical_props_2str) :: cloud_sw
-   ! real(r8), allocatable :: band_lims_wavenum(:,:)  ! use kdist_sw%get_band_lims_wavenumber() instead?
 
    integer :: icall                 ! index through climate/diagnostic radiation calls
    logical :: active_calls(0:N_DIAG)
@@ -966,12 +941,16 @@ subroutine radiation_tend( &
 
    logical :: conserve_energy = .true. ! Flag to carry (QRS,QRL)*dp across time steps. 
 
-   real(r8), pointer     :: gas_mmr(:,:)  !!!!! debugging 
    integer :: iband
    integer :: nlevcam, nlevrad
 
-   logical :: sad_debugging = .true.
+   logical :: sad_debugging = .true.  !!!! remove this once final
    !--------------------------------------------------------------------------------------
+   ! BPM -- MAKE SURE:
+   if (.not.(single_column)) then
+      sad_debugging = .false.
+   end if
+
    lchnk = state%lchnk
    ncol = state%ncol
    nlevcam = size(state%t,2)  ! number of levels in CAM grid
@@ -1017,8 +996,6 @@ subroutine radiation_tend( &
          IdxNite(Nnite) = i
       end if
    end do
-
-   ! print*,'[radiation_tend] nday = ',nday,', ncol = ',ncol ,', coszrs = ',coszrs(1),'dt_avg = ',dt_avg,'use_rad_uniform_angle = ',use_rad_uniform_angle
 
    ! Associate pointers to physics buffer fields
    itim_old = pbuf_old_tim_idx()
@@ -1083,14 +1060,6 @@ subroutine radiation_tend( &
       rd%qrsc(1:ncol,1:pver) = 0  ! this is what gets turned into QRSC in output (probably not needed here.)
       dosw = .false.
    end if
-   ! BPM -- debugging -- remove when done.
-   ! write(iulog,*) "BPM - radiation - (step = ",get_nstep(),") dosw = ",dosw,", and dolow = ",dolw
-   ! write(iulog,*) "BPM - radiation - calday = ",calday,", lat = ",clat(1),", lon = ",clon(1),", coszrs = ",coszrs(1)
-   ! print*, "BPM - radiation - (step = ",get_nstep(),") dosw = ",dosw,", and dolow = ",dolw
-   ! print*, "BPM - radiation - calday = ",calday,", lat = ",clat(1),", lon = ",clon(1),", coszrs = ",coszrs(1)
-   ! do k=1,pver
-   !    print*, "BPM - radiation - LEVEL ",k," state%t = ",state%t(1,k)
-   ! end do
 
 
    if (dosw .or. dolw) then
@@ -1139,7 +1108,7 @@ subroutine radiation_tend( &
          coszrs_day,     & ! output
          alb_dir,        & ! output
          alb_dif) !,        & ! output
-         ! rd%solin        & ! output (TOA flux, but gas optics is also doing it later... Do not use. Should remove once validated.)
+         ! rd%solin        & ! output (TOA flux, but gas optics is also doing it --> SHOULD BE AN OPTION ???)
          ! )
       nlevrad = size(t_rad,2)
       if (sad_debugging) then
@@ -1177,9 +1146,6 @@ subroutine radiation_tend( &
          !
          ! "--- SET OPTICAL PROPERTIES & DO SHORTWAVE CALCULATION ---"
          !
-         if (sad_debugging) then
-            write(iulog,*) '[RADIATION_TEND / DOSW IS TRUE] OLDOPTICS = ',oldcldoptics,' / ICECLDOPTICS = ',icecldoptics,' / LIQCLDOPTICS = ',liqcldoptics
-         end if
          if (oldcldoptics) then
             call ec_ice_optics_sw(state, pbuf, ice_tau, ice_tau_w, ice_tau_w_g, ice_tau_w_f, oldicewp=.false.)
             call slingo_liq_optics_sw(state, pbuf, liq_tau, liq_tau_w, liq_tau_w_g, liq_tau_w_f, oldliqwp=.false.)
@@ -1298,20 +1264,16 @@ subroutine radiation_tend( &
          !
          ! Mapping from old RRTMG sw bands to new band ordering in RRTMGP
          ! 1. This should be automated to provide generalization to arbitrary spectral grid.
-         ! 2. This is used for setting cloud and aerosol optical properties, so probably should be put into a different module.
-         do i = 1,ncol
-            do k = 1,pver
-               do iband = 1,size(rrtmg_to_rrtmgp_swbands)
-                  c_cld_tau(iband, i, k)     = c_cld_tau(    rrtmg_to_rrtmgp_swbands(iband), i, k)
-                  c_cld_tau_w(iband, i, k)   = c_cld_tau_w(  rrtmg_to_rrtmgp_swbands(iband), i, k)
-                  c_cld_tau_w_g(iband, i, k) = c_cld_tau_w_g(rrtmg_to_rrtmgp_swbands(iband), i, k)
-                  c_cld_tau_w_f(iband, i, k) = c_cld_tau_w_f(rrtmg_to_rrtmgp_swbands(iband), i, k)
-               end do
-            end do
-         end do
+         ! 2. This is used for setting cloud and aerosol optical properties, so probably should be put into a different module.   
+         c_cld_tau     = c_cld_tau    (rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
+         c_cld_tau_w   = c_cld_tau_w  (rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
+         c_cld_tau_w_g = c_cld_tau_w_g(rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
+         c_cld_tau_w_f = c_cld_tau_w_f(rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
+
 
          if (sad_debugging) then
             print*,'--- Right AFTER BAND-REORDERING --- nstep = ',get_nstep()
+            print*,'Shape of c_cld_tau : ',shape(c_cld_tau)
             do k=1,pver
                print '("LEVEL",i2,3x,"cldfprime = ",f12.6,2x,"CLD = ",f12.6,3x," CLDFSNOW = ",f12.6," Max(SNOW_TAU)",f12.6,3x," Max(TAU)=",f12.6)', k, cldfprime(1,k),cld(1,k),cldfsnow(1,k),maxval(snow_tau(:,1,k)),maxval(c_cld_tau(:,1,k))
             end do
@@ -1336,6 +1298,7 @@ subroutine radiation_tend( &
          )
          if (sad_debugging) then
             print*,'--- Right AFTER rrtmgp_set_cloud_sw --- nstep = ',get_nstep()
+            print*,'Shape of cloud_sw%tau : ', shape(cloud_sw%tau)
             do k=1,pver
                print '("LEVEL",i2,3x,"cldfprime = ",f12.6,2x," Max(TAU)=",f12.6,2x," Max(cloud_sw%tau)",f12.6)', k, cldfprime(1,k),maxval(c_cld_tau(:,1,k)),maxval(cloud_sw%tau(1,k,:))
             end do
@@ -1410,7 +1373,7 @@ subroutine radiation_tend( &
                                  pbuf,        & ! input pointer
                                  nnite,       & ! input
                                  idxnite,     & ! input
-                                 aer_tau,     & ! output ; these are ordered top-to-bottom
+                                 aer_tau,     & ! output
                                  aer_tau_w,   & ! output
                                  aer_tau_w_g, & ! output
                                  aer_tau_w_f  & ! output
@@ -1421,18 +1384,13 @@ subroutine radiation_tend( &
                !       aer_sw%g   = aer_tau_w_g / aer_taw_w
                !       aer_sw%ssa = aer_tau_w / aer_tau
                !       aer_sw%tau = aer_tau
-               !       rrtmgp_set_aer_sw reverses the order, so aer_sw quantities are ordered bottom-to-top.
-               ! BUT: As with cloud above, we need to re-order to account for band differences:
-               do i = 1,ncol
-                  do k = 1,pver
-                     do iband = 1,size(rrtmg_to_rrtmgp_swbands)
-                        aer_tau(iband, i, k)     = aer_tau(    rrtmg_to_rrtmgp_swbands(iband), i, k)
-                        aer_tau_w(iband, i, k)   = aer_tau_w(  rrtmg_to_rrtmgp_swbands(iband), i, k)
-                        aer_tau_w_g(iband, i, k) = aer_tau_w_g(rrtmg_to_rrtmgp_swbands(iband), i, k)
-                        aer_tau_w_f(iband, i, k) = aer_tau_w_f(rrtmg_to_rrtmgp_swbands(iband), i, k)
-                     end do
-                  end do
-               end do
+               ! ** As with cloud above, we need to re-order to account for band differences:
+
+               aer_tau(:, :, :)     = aer_tau(    :, :, rrtmg_to_rrtmgp_swbands)
+               aer_tau_w(:, :, :)   = aer_tau_w(  :, :, rrtmg_to_rrtmgp_swbands)
+               aer_tau_w_g(:, :, :) = aer_tau_w_g(:, :, rrtmg_to_rrtmgp_swbands)
+               aer_tau_w_f(:, :, :) = aer_tau_w_f(:, :, rrtmg_to_rrtmgp_swbands)
+
                
                call rrtmgp_set_aer_sw( &
                   nswbands, nday, idxday, aer_tau, aer_tau_w, &
@@ -1462,20 +1420,19 @@ subroutine radiation_tend( &
                end if
                call t_startf('rad_sw')
                errmsg = rte_sw( kdist_sw,     & ! input (from init)
-                                gas_concs_sw, & ! input, ordered bottom-to-top (from rrtmgp_set_gases_sw)
-                                pmid_day,     & ! input, ordered bottom-to-top (from rrtmgp_set_state)
-                                t_day,        & ! input, ordered bottom-to-top (from rrtmgp_set_state)
-                                pint_day,     & ! input, ordered bottom-to-top (from rrtmgp_set_state)
-                                coszrs_day,   & ! input (from rrtmgp_set_state)
-                                alb_dir,      & ! input (from rrtmgp_set_state)
-                                alb_dif,      & ! input (from rrtmgp_set_state)
-                                cloud_sw,     & ! input (from rrtmgp_set_cloud_sw)
-                                fsw,      & ! inout ! Since the inputs are bottom-to-top, these are bottom to top.
+                                gas_concs_sw, & ! input, (from rrtmgp_set_gases_sw)
+                                pmid_day,     & ! input, (from rrtmgp_set_state)
+                                t_day,        & ! input, (from rrtmgp_set_state)
+                                pint_day,     & ! input, (from rrtmgp_set_state)
+                                coszrs_day,   & ! input, (from rrtmgp_set_state)
+                                alb_dir,      & ! input, (from rrtmgp_set_state)
+                                alb_dif,      & ! input, (from rrtmgp_set_state)
+                                cloud_sw,     & ! input, (from rrtmgp_set_cloud_sw)
+                                fsw,      & ! inout
                                 fswc,     & ! inout 
                                 aer_props=aer_sw, & ! optional input (from rrtmgp_set_aer_sw)
                                 tsi_scaling=eccf)   ! optional input
                if (len_trim(errmsg) > 0) then
-                  print*, 'ERROR return from rte_sw at lchnk=', lchnk
                   call endrun(sub//': ERROR code returned by rte_sw: '//trim(errmsg))
                end if
 
@@ -1536,8 +1493,6 @@ subroutine radiation_tend( &
       ! -- LONGWAVE --
       !
       if (dolw) then
-         ! call ice_cloud_get_rad_props_lw(state, pbuf, ice_lw_abs)
-         ! call liquid_cloud_get_rad_props_lw(state, pbuf, liq_lw_abs)
          if (oldcldoptics) then
             call cloud_rad_props_get_lw(state, pbuf, cld_lw_abs, oldcloud=.true.)
          else
@@ -1595,15 +1550,6 @@ subroutine radiation_tend( &
          end if
 
          ! cloud_lw : cloud optical properties.
-         ! 1. Note the init method is allocating memory, but there is not method to
-         ! deallocate the memory.  Not sure whether Fortran will deallocate this
-         ! memory when the local object goes out of scope.
-
-         ! errmsg = cloud_lw%alloc_1scl(ncol, nlay, kdist_lw, name='longwave cloud optics') 
-         ! if (len_trim(errmsg) > 0) then
-         !    call endrun(sub//': ERROR: cloud_lw%init_1scalar: '//trim(errmsg))
-         ! end if
-         ! cloud_lw%tau = 0.0
          call initialize_rrtmgp_cloud_optics_lw(ncol, nlay, kdist_lw, cloud_lw)
          
          call rrtmgp_set_cloud_lw( & ! Sets the LW optical depth (tau) that is passed to RRTMGP
@@ -1662,16 +1608,16 @@ subroutine radiation_tend( &
                call t_startf('rad_lw')
 
                errmsg = rte_lw(kdist_lw,         & ! input
-                               gas_concs_lw,     & ! input, ordered bottom-to-top (rrtmgp_set_gases_lw)
-                               pmid_rad,         & ! input, ordered bottom-to-top (rrtmgp_set_state)
-                               t_rad,            & ! input, ordered bottom-to-top (rrtmgp_set_state)
-                               pint_rad,         & ! input, ordered bottom-to-top (rrtmgp_set_state)
+                               gas_concs_lw,     & ! input, (rrtmgp_set_gases_lw)
+                               pmid_rad,         & ! input, (rrtmgp_set_state)
+                               t_rad,            & ! input, (rrtmgp_set_state)
+                               pint_rad,         & ! input, (rrtmgp_set_state)
                                t_sfc,            & ! input (rrtmgp_set_state)
                                emis_sfc,         & ! input (rrtmgp_set_state)
-                               cloud_lw,         & ! input, ordered bottom-to-top (rrtmgp_set_cloud_lw)
+                               cloud_lw,         & ! input, (rrtmgp_set_cloud_lw)
                                flw,              & ! output
                                flwc,             & ! output
-                               aer_props=aer_lw  & ! optional input, ordered bottom-to-top (rrtmgp_set_aer_lw)  
+                               aer_props=aer_lw  & ! optional input, (rrtmgp_set_aer_lw)  
                )
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_lw: '//trim(errmsg))
@@ -1783,39 +1729,41 @@ contains
 
       fns  = 0._r8 ! net sw flux
       fcns = 0._r8 ! net sw clearsky flux
-
+      fsds               = 0._r8 ! downward sw flux at surface
+      rd%fsdsc           = 0._r8 ! downward sw clearsky flux at surface
+      rd%fsutoa          = 0._r8 ! upward sw flux at TOA
+      rd%fsntoa          = 0._r8 ! net sw at TOA
+      rd%fsntoac         = 0._r8 ! net sw clearsky flux at TOA
+      rd%solin           = 0._r8 ! solar irradiance at TOA
+      ! fns, fcns, rd are on CAM grid (do not have "extra layer" when it is present.)
+      ! fill in the daylit columns:
       do i = 1, nday
-         fns(idxday(i),ktopcami:pverp)  = fsw%flux_net(i, ktopradi:pverp)
-         fcns(idxday(i),ktopcami:pverp) = fswc%flux_net(i,ktopradi:pverp)
-         rd%flux_sw_up(idxday(i),ktopcami:pverp) = &
-             fsw%flux_up(i,ktopradi:kbotradi:kstride)
-         rd%flux_sw_dn(idxday(i),ktopcami:pverp) = &
-             fsw%flux_dn(i,ktopradi:kbotradi:kstride)
-         rd%flux_sw_clr_up(idxday(i),ktopcami:pverp) = &
-             fswc%flux_up(i,ktopradi:kbotradi:kstride) 
-         rd%flux_sw_clr_dn(idxday(i),ktopcami:pverp) = & 
-             fswc%flux_dn(i,ktopradi:kbotradi:kstride)
+         fns(idxday(i),ktopcami:)  = fsw%flux_net(i, ktopradi:)
+         fcns(idxday(i),ktopcami:) = fswc%flux_net(i,ktopradi:)
+         rd%flux_sw_up(idxday(i),ktopcami:) = &
+             fsw%flux_up(i,ktopradi:)
+         rd%flux_sw_dn(idxday(i),ktopcami:) = &
+             fsw%flux_dn(i,ktopradi:)
+         rd%flux_sw_clr_up(idxday(i),ktopcami:) = &
+             fswc%flux_up(i,ktopradi:) 
+         rd%flux_sw_clr_dn(idxday(i),ktopcami:) = & 
+             fswc%flux_dn(i,ktopradi:)
+         fsds(idxday(i))        = fsw%flux_dn(i, nlay+1)
+         rd%fsdsc(idxday(i))    = fswc%flux_dn(i, nlay+1)
+         rd%fsutoa(idxday(i))   = fsw%flux_up(i, ktopradi)
+         rd%fsntoa(idxday(i))   = fsw%flux_net(i, ktopradi)       ! net sw flux at TOA (*NOT* the same as fsnt)
+         rd%fsntoac(idxday(i))  = fswc%flux_net(i, ktopradi)     ! net sw clearsky flux at TOA (*NOT* the same as fsntc)
+         rd%solin(idxday(i))    = fswc%flux_dn(i, ktopradi)
       end do
 
       call heating_rate('SW', ncol, fns, qrs)
       call heating_rate('SW', ncol, fcns, rd%qrsc)
-      fsns(:ncol)       = fns(:ncol,kbotradi)  ! net sw flux a surface
-      fsnt(:ncol)       = fns(:ncol,ktopradi)      ! net sw flux at top
-      rd%flux_sw_net_top = fns(:ncol, ktopradi)   
-      rd%fsntoa(:ncol)  = fns(:ncol,ktopradi)       ! net sw flux at TOA (same as fsnt right now)
-      rd%fsnsc(:ncol)   = fcns(:ncol,kbotradi) ! net sw clearsky flux at surface
-      rd%fsntc(:ncol)   = fcns(:ncol,ktopradi)     ! net sw clearsky flux at top
-      rd%fsntoac(:ncol) = fcns(:ncol,ktopradi)     ! net sw clearsky flux at TOA (same as fsntc right now)
-      fsds              = 0._r8 ! downward sw flux at surface
-      rd%fsdsc          = 0._r8 ! downward sw clearsky flux at surface
-      rd%fsutoa         = 0._r8 ! upward sw flux at TOA
-      rd%solin          = 0._r8 ! solar irradiance at TOA
-      do i = 1, nday
-         fsds(idxday(i))      = fsw%flux_dn(i,kbotradi)
-         rd%fsdsc(idxday(i))  = fswc%flux_dn(i,kbotradi)
-         rd%fsutoa(idxday(i)) = fsw%flux_up(i,ktopradi)
-         rd%solin(idxday(i))  = fswc%flux_dn(i,ktopradi)
-      end do
+
+      fsns(:ncol)        = fns(:ncol,pverp)  ! net sw flux at surface
+      fsnt(:ncol)        = fns(:ncol,1)      ! net sw flux at top-of-model (w/o extra layer)
+      rd%flux_sw_net_top = fns(:ncol, 1)   
+      rd%fsnsc(:ncol)    = fcns(:ncol,pverp) ! net sw clearsky flux at surface
+      rd%fsntc(:ncol)    = fcns(:ncol,1)     ! net sw clearsky flux at top
 
       cam_out%netsw(:ncol) = fsns(:ncol)
 
@@ -1832,8 +1780,8 @@ contains
          su  = 0._r8
          sd  = 0._r8
          do i = 1, nday
-            su(idxday(i),ktopcami:kbotcami,:) = fsw%bnd_flux_up(i,ktopradi:kbotradi:kstride,:)
-            sd(idxday(i),ktopcami:kbotcami,:) = fsw%bnd_flux_dn(i,ktopradi:kbotradi:kstride,:)
+            su(idxday(i),ktopcami:,:) = fsw%bnd_flux_up(i,ktopradi:,:)
+            sd(idxday(i),ktopcami:,:) = fsw%bnd_flux_dn(i,ktopradi:,:)
          end do
       end if
 
@@ -1882,32 +1830,32 @@ contains
       ! Assumes RRTMGP levels are bottom to top (though it does not care need to be consistent).  
       ! CAM levels are top to bottom.
       !----------------------------------------------------------------------------
-
+ 
       fnl = 0._r8
       fcnl = 0._r8
 
-      ! RTE-RRTMGP convention for net is (down - up) **CAM assumes (down - up) !!
-      fnl(:ncol,ktopcami:pverp)  = -1._r8 * flw%flux_net(:,ktopradi:pverp)
-      fcnl(:ncol,ktopcami:pverp) = -1._r8 * flwc%flux_net(:,ktopradi:pverp)
-      rd%flux_lw_up(:ncol,ktopcami:pverp)     = flw%flux_up(:,ktopradi:pverp)
-      rd%flux_lw_clr_up(:ncol,ktopcami:pverp) = flwc%flux_up(:,ktopradi:pverp)
-      rd%flux_lw_dn(:ncol,ktopcami:pverp)     = flw%flux_dn(:,ktopradi:pverp)
-      rd%flux_lw_clr_dn(:ncol,ktopcami:pverp) = flwc%flux_dn(:,ktopradi:pverp)
+      ! RTE-RRTMGP convention for net is (down - up) **CAM assumes (up - down) !!
+      fnl(:ncol,ktopcami:)  = -1._r8 * flw%flux_net(    :, ktopradi:)
+      fcnl(:ncol,ktopcami:) = -1._r8 * flwc%flux_net(   :, ktopradi:)
+      rd%flux_lw_up(:ncol,ktopcami:)     = flw%flux_up( :, ktopradi:)
+      rd%flux_lw_clr_up(:ncol,ktopcami:) = flwc%flux_up(:, ktopradi:)
+      rd%flux_lw_dn(:ncol,ktopcami:)     = flw%flux_dn( :, ktopradi:)
+      rd%flux_lw_clr_dn(:ncol,ktopcami:) = flwc%flux_dn(:, ktopradi:)
 
       call heating_rate('LW', ncol, fnl, qrl)
       call heating_rate('LW', ncol, fcnl, rd%qrlc)
 
-      flns(:ncol) = fnl(:ncol,kbotradi)
-      flnt(:ncol) = fnl(:ncol,ktopradi)
+      flns(:ncol) = fnl(:ncol, pverp)
+      flnt(:ncol) = fnl(:ncol, pverp)
 
-      rd%flnsc(:ncol) = fcnl(:ncol,kbotradi)
-      rd%flntc(:ncol) = fcnl(:ncol,ktopradi)
+      rd%flnsc(:ncol) = fcnl(:ncol, pverp)
+      rd%flntc(:ncol) = fcnl(:ncol, 1)    ! net lw flux at top-of-model
 
-      cam_out%flwds(:ncol) = flw%flux_dn(:,kbotradi)
-      rd%fldsc(:ncol)      = flwc%flux_dn(:,kbotradi)
+      cam_out%flwds(:ncol) = flw%flux_dn(:, nlay+1)
+      rd%fldsc(:ncol)      = flwc%flux_dn(:, nlay+1)
 
-      rd%flut(:ncol)  = flw%flux_up(:,ktopradi) ! flw%flux_up(:,nlay+1)
-      rd%flutc(:ncol) = flwc%flux_up(:,ktopradi) ! flwc%flux_up(:,nlay+1)
+      rd%flut(:ncol)  = flw%flux_up(:, ktopradi) 
+      rd%flutc(:ncol) = flwc%flux_up(:, ktopradi)
 
       ! Output fluxes at 200 mb
       call vertinterp(ncol, pcols, pverp, state%pint, 20000._r8, fnl,  rd%fln200)
@@ -1921,8 +1869,8 @@ contains
       if (spectralflux) then
          lu  = 0._r8
          ld  = 0._r8
-         lu(:ncol,ktopcami:pverp,:)  = flw%bnd_flux_up(:,ktopradi:kbotradi:kstride,:)
-         ld(:ncol,ktopcami:pverp,:)  = flw%bnd_flux_dn(:,ktopradi:kbotradi:kstride,:)
+         lu(:ncol, ktopcami:, :)  = flw%bnd_flux_up(:, ktopradi:, :)
+         ld(:ncol, ktopcami:, :)  = flw%bnd_flux_dn(:, ktopradi:, :)
       end if
 
    end subroutine set_lw_diags
@@ -2694,7 +2642,9 @@ subroutine coefs_init(coefs_file, kdist, available_gases)
       error_msg = 'must supply either totplnk and planck_frac, or solar_src_[*]'
    end if
 
-   if (error_msg /= ' ') call endrun(sub//': ERROR: '//trim(error_msg))
+   if (len_trim(error_msg) > 0) then
+      call endrun(sub//': ERROR: '//trim(error_msg))
+   end if
 
    deallocate( &
       gas_names, key_species,               &
@@ -2742,7 +2692,7 @@ subroutine set_available_gases(gases, gas_concentrations)
       gases_lowercase(igas) = trim(lower_case(gases(igas)))
    end do
    error_msg = gas_concentrations%init(gases_lowercase)
-   if (error_msg /= '') then
+   if (len_trim(error_msg) > 0) then
       call endrun('Setting available gases. ERROR: '//trim(error_msg))
    end if
 end subroutine set_available_gases
@@ -2822,15 +2772,16 @@ subroutine initialize_rrtmgp_cloud_optics_sw(ncol, nlevels, kdist, optics)
    character(len=128) :: errmsg
    character(len=128) :: sub = 'initialize_rrtmgp_cloud_optics_sw'
 
-   ngpt = kdist%get_ngpt()
+   ! ngpt = kdist%get_ngpt()
+
    errmsg = optics%alloc_2str(ncol, nlevels, kdist, name='shortwave cloud optics')
    if (len_trim(errmsg) > 0) then
       call endrun(trim(sub)//': ERROR: optics%alloc_2str: '//trim(errmsg))
    end if
    ! these are all expected to be shape (ncol, nlay, ngpt)
-   optics%tau(:ncol,:nlevels,:ngpt) = 0.0_r8
-   optics%ssa(:ncol,:nlevels,:ngpt) = 1.0_r8
-   optics%g(:ncol,:nlevels,:ngpt)   = 0.0_r8   
+   optics%tau = 0.0_r8
+   optics%ssa = 1.0_r8
+   optics%g   = 0.0_r8   
 end subroutine initialize_rrtmgp_cloud_optics_sw
 
 
