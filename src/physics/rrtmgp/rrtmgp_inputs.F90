@@ -604,7 +604,6 @@ subroutine rrtmgp_set_cloud_lw(state, nlwbands, cldfrac, c_cld_lw_abs, lwkDist, 
    character(len=32)  :: sub = 'rrtmgp_set_cloud_lw'
    character(len=128) :: errmsg
    !--------------------------------------------------------------------------------
-
    ncol   = state%ncol
    ngptlw = lwkDist%get_ngpt()
 
@@ -634,10 +633,9 @@ subroutine rrtmgp_set_cloud_lw(state, nlwbands, cldfrac, c_cld_lw_abs, lwkDist, 
    end do
    errmsg = cloud_lw%validate()
    if (len_trim(errmsg) > 0) then
-      call endrun(sub//': ERROR: cloud_sw%validate: '//trim(errmsg))
+      call endrun(sub//': ERROR: cloud_lw%validate: '//trim(errmsg))
    end if
    deallocate(taucmcl)
-
 end subroutine rrtmgp_set_cloud_lw
 
 !==================================================================================================
@@ -651,15 +649,18 @@ subroutine rrtmgp_set_aer_lw(ncol, nlwbands, aer_lw_abs, aer_lw)
    integer,                intent(in)    :: nlwbands
    real(r8),               intent(in)    :: aer_lw_abs(pcols,pver,nlwbands) ! aerosol absorption optics depth (LW)
    type(ty_optical_props_1scl), intent(inout) :: aer_lw
+   character(len=32)  :: sub = 'rrtmgp_set_aer_lw'
+   character(len=128) :: errmsg
 
    !--------------------------------------------------------------------------------
-
    ! If there is an extra layer in the radiation then this initialization
    ! will provide zero optical depths there.
    aer_lw%tau = 0.0_r8
    aer_lw%tau(:ncol, ktopradm:, :) = aer_lw_abs(:ncol, ktopcamm:, :)
-
-
+   errmsg = aer_lw%validate()
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': ERROR: aer_lw%validate: '//trim(errmsg))
+   end if
 end subroutine rrtmgp_set_aer_lw
 
 !==================================================================================================
@@ -729,11 +730,11 @@ subroutine rrtmgp_set_cloud_sw( &
       day_cld_tau_w(nswbands,nday,nver),   &
       day_cld_tau_w_g(nswbands,nday,nver))
 
-   ! get daylit arrays on radiation levels
-   day_cld_tau     = c_cld_tau(    :, idxday, ktopcamm:)
-   day_cld_tau_w   = c_cld_tau_w(  :, idxday, ktopcamm:)
-   day_cld_tau_w_g = c_cld_tau_w_g(:, idxday, ktopcamm:)
-   cldf = cldfrac(idxday, ktopcamm:)  ! daylit cloud fraction on radiation levels
+   ! get daylit arrays on radiation levels, note: expect idxday to be truncated to size nday
+   day_cld_tau     = c_cld_tau(    :, idxday(1:nday), ktopcamm:)
+   day_cld_tau_w   = c_cld_tau_w(  :, idxday(1:nday), ktopcamm:)
+   day_cld_tau_w_g = c_cld_tau_w_g(:, idxday(1:nday), ktopcamm:)
+   cldf = cldfrac(idxday(1:nday), ktopcamm:)  ! daylit cloud fraction on radiation levels
    tauc = merge(day_cld_tau, 0.0_r8, day_cld_tau > 0.0_r8)  ! start by setting cloud optical depth, clip @ zero
    asmc = merge(day_cld_tau_w_g / max(day_cld_tau_w, small_val), 0.0_r8, day_cld_tau_w > 0.0_r8)  ! set value of asymmetry
    ssac = merge(max(day_cld_tau_w, small_val) / max(tauc, small_val), 1.0_r8 , tauc > 0.0_r8)
@@ -810,18 +811,35 @@ subroutine rrtmgp_set_aer_sw( &
    integer  :: ns
    integer  :: k, kk
    integer  :: i
+   integer, dimension(nday) :: day_cols
+   character(len=32)  :: sub = 'rrtmgp_set_aer_sw'
+   character(len=128) :: errmsg
    !--------------------------------------------------------------------------------
    ! If there is an extra layer in the radiation then this initialization
    ! will provide default values there.
    aer_sw%tau = 0.0_r8
    aer_sw%ssa = 1.0_r8
    aer_sw%g   = 0.0_r8
+   day_cols = idxday(1:nday)
 
    ! aer_sw is on RAD grid, aer_tau* is on CAM grid ... to make sure they align, use ktop*
-   aer_sw%tau(idxday, ktopradm:, :) = max(aer_tau(idxday, ktopcamm:, :), 0._r8)
-   aer_sw%ssa(idxday, ktopradm:, :) = merge(aer_tau_w(idxday, ktopcamm:,:)/aer_tau(idxday, ktopcamm:, :), 1._r8, aer_tau(idxday, ktopcamm:, :) > 0._r8)
-   aer_sw%g(  idxday, ktopradm:, :) = merge(aer_tau_w_g(idxday, ktopcamm:, :) / aer_tau_w(idxday, ktopcamm:, :), 0._r8, aer_tau_w(idxday, ktopcamm:, :) > 1.e-80_r8)
+   ! aer_sw has dimensions of (nday, nlay, nswbands)
+   aer_sw%tau(1:nday, ktopradm:, :) = max(aer_tau(day_cols, ktopcamm:, :), 0._r8)
+   aer_sw%ssa(1:nday, ktopradm:, :) = merge(aer_tau_w(day_cols, ktopcamm:,:)/aer_tau(day_cols, ktopcamm:, :), 1._r8, aer_tau(day_cols, ktopcamm:, :) > 0._r8)
+   aer_sw%g(  1:nday, ktopradm:, :) = merge(aer_tau_w_g(day_cols, ktopcamm:, :) / aer_tau_w(day_cols, ktopcamm:, :), 0._r8, aer_tau_w(day_cols, ktopcamm:, :) > 1.e-80_r8)
 
+   ! impose limits on the components:
+   ! aer_sw%tau = max(aer_sw%tau, 0._r) <-- already imposed 
+   aer_sw%ssa = min(max(aer_sw%ssa, 0._r8), 1._r8)
+   aer_sw%g = min(max(aer_sw%g, -1._r8), 1._r8)
+   ! by clamping the values here, the validate method should be guaranteed to succeed,
+   ! but we're also saying that any errors in the method to this point are being swept aside. 
+   ! We might want to check for out-of-bounds values and report them in the log file.
+
+   errmsg = aer_sw%validate()
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': ERROR: aer_sw%validate: '//trim(errmsg))
+   end if
 end subroutine rrtmgp_set_aer_sw
 
 !==================================================================================================

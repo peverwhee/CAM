@@ -47,7 +47,6 @@ use pio,                 only: file_desc_t, var_desc_t,               &
 
 use cam_abortutils,      only: endrun
 use error_messages,      only: handle_err
-use perf_mod,            only: t_startf, t_stopf
 use cam_logfile,         only: iulog
 use scamMod,             only: scm_crm_mode, single_column, have_cld, cldobs
 
@@ -944,12 +943,7 @@ subroutine radiation_tend( &
    integer :: iband
    integer :: nlevcam, nlevrad
 
-   logical :: sad_debugging = .true.  !!!! remove this once final
    !--------------------------------------------------------------------------------------
-   ! BPM -- MAKE SURE:
-   if (.not.(single_column)) then
-      sad_debugging = .false.
-   end if
 
    lchnk = state%lchnk
    ncol = state%ncol
@@ -1028,9 +1022,9 @@ subroutine radiation_tend( &
       call pbuf_get_field(pbuf, ld_idx, ld)
    end if
 
-   ! initialize (and reset) all the fluxes
-   call initialize_rrtmgp_fluxes(ncol, nlay+1, nswbands, fsw, do_direct=.true.)
-   call initialize_rrtmgp_fluxes(ncol, nlay+1, nswbands, fswc, do_direct=.true.)
+   ! initialize (and reset) all the fluxes // sw fluxes only on nday columns
+   call initialize_rrtmgp_fluxes(nday, nlay+1, nswbands, fsw, do_direct=.true.)
+   call initialize_rrtmgp_fluxes(nday, nlay+1, nswbands, fswc, do_direct=.true.)
    call initialize_rrtmgp_fluxes(ncol, nlay+1, nlwbands, flw)
    call initialize_rrtmgp_fluxes(ncol, nlay+1, nlwbands, flwc)
 
@@ -1061,6 +1055,13 @@ subroutine radiation_tend( &
       dosw = .false.
    end if
 
+   ! On first time step, do we need to initialize the heating rates in pbuf?
+   ! what about on a restart? 
+   if (get_nstep() == 0) then
+      qrs = 0._r8
+      qrl = 0._r8
+   end if
+
 
    if (dosw .or. dolw) then
 
@@ -1077,12 +1078,6 @@ subroutine radiation_tend( &
          alb_dir(nswbands,nday),  &
          alb_dif(nswbands,nday)   )
 
-      if (sad_debugging) then
-         print*,'--- Before rrtmgp_set_state --- dosw = ',dosw,', dolw = ',dolw
-         do k=1,pver
-            print '("LEVEL",i2,3x," state%t = ",f12.4,"state%pmid = ",f12.4)', k,state%t(1,k),state%pmid(1,k)
-         end do
-      end if
 
       call rrtmgp_set_state( & ! Prepares state variables, daylit columns, albedos for RRTMGP
          state,          & ! input (%t, %pmid, %pint)
@@ -1093,7 +1088,7 @@ subroutine radiation_tend( &
          nswbands,       & ! input
          ngpt_sw,        & ! input (unused)
          nday,           & ! input
-         idxday,         & ! input
+         idxday,         & ! input, [would prefer to truncate as 1:ncol]
          coszrs,         & ! input
          kdist_sw,       & ! input (from init)
          eccf,           & ! input
@@ -1111,36 +1106,15 @@ subroutine radiation_tend( &
          ! rd%solin        & ! output (TOA flux, but gas optics is also doing it --> SHOULD BE AN OPTION ???)
          ! )
       nlevrad = size(t_rad,2)
-      if (sad_debugging) then
-         print*,'--- After rrtmgp_set_state ---'
-         do k=1,nlevrad
-            print '("_RAD_ LEVEL",i2,3x," t_day = ",f12.4,"pmid_day = ",f12.4)', k,t_day(1,k),pmid_day(1,k)
-         end do
-      end if
    
       ! check bounds for temperature -- These are specified in the coefficients file,
       ! and RRTMGP will not operate if outside the specified range.
       call clipper(t_day, kdist_lw%get_temp_min(), kdist_lw%get_temp_max())
       call clipper(t_rad, kdist_lw%get_temp_min(), kdist_lw%get_temp_max())    
 
-      call t_startf('cldoptics')
-
-      if (sad_debugging) then
-         print*,'--- Before CF Modification --- nstep = ',get_nstep()
-         do k=1,pver
-            print '("LEVEL",i2,3x,"CLD = ",f12.6,3x," CLDFSNOW = ",f12.6)', k,cld(1,k),cldfsnow(1,k)
-         end do
-      end if
-
       ! Modify cloud fraction to account for radiatively active snow and/or graupel
       call modified_cloud_fraction(cld, cldfsnow, cldfgrau, cldfsnow_idx, cldfgrau_idx, cldfprime)
 
-      if (sad_debugging) then
-         print*,'--- AFTER CF Modification --- nstep = ',get_nstep()
-         do k=1,pver
-            print '("LEVEL",i2,3x,"CLD = ",f12.6,3x," CLDFSNOW = ",f12.6,3x,"CLDFPRIME = ",f12.6)', k,cld(1,k),cldfsnow(1,k),cldfprime(1,k)
-         end do
-      end if
            
       if (dosw) then
          !
@@ -1174,15 +1148,6 @@ subroutine radiation_tend( &
          cld_tau_w_g(:,:ncol,:) =  liq_tau_w_g(:,:ncol,:) + ice_tau_w_g(:,:ncol,:)
          cld_tau_w_f(:,:ncol,:) =  liq_tau_w_f(:,:ncol,:) + ice_tau_w_f(:,:ncol,:)
 
-         if (sad_debugging) then
-         ! BPM Debugging -- CHECK VALUES OF CLOUD PROPERTIES -- remove when done
-         ! cld_tau* are (nswbands,pcols,pver)
-            print*,'--- Right before CF SNOW OPTICS --- nstep = ',get_nstep()
-            do k=1,pver
-               print '("LEVEL",i2,3x,"max[CLD_TAU] = ",f12.6,3x,"min[CLD_SSA] = ",f12.6)', k, maxval(c_cld_tau(:,1,k)),minval(c_cld_tau_w(:,1,k)/c_cld_tau(:,1,k))
-            end do
-         end if
-
          if (cldfsnow_idx > 0) then
             ! add in snow
             call get_snow_optics_sw(state, pbuf, snow_tau, snow_tau_w, snow_tau_w_g, snow_tau_w_f)
@@ -1215,13 +1180,6 @@ subroutine radiation_tend( &
             c_cld_tau_w_f(:,:ncol,:) = cld_tau_w_f(:,:ncol,:)
          end if
 
-         if (sad_debugging) then
-            print*,'--- Right AFTER SNOW OPTICS --- nstep = ',get_nstep()
-            do k=1,pver
-               print '("LEVEL",i2,3x,"cldfprime = ",f12.6,2x,"CLD = ",f12.6,3x," CLDFSNOW = ",f12.6," Max(SNOW_TAU)",f12.6,3x," Max(TAU)=",f12.6)', k, cldfprime(1,k),cld(1,k),cldfsnow(1,k),maxval(snow_tau(:,1,k)),maxval(c_cld_tau(:,1,k))
-            end do
-         end if
-
          if (cldfgrau_idx > 0 .and. graupel_in_rad) then
             ! add in graupel
             call get_grau_optics_sw(state, pbuf, grau_tau, grau_tau_w, grau_tau_w_g, grau_tau_w_f)
@@ -1251,14 +1209,6 @@ subroutine radiation_tend( &
             end do
          end if
 
-
-         if (sad_debugging) then
-            print*,'--- Right AFTER GRAUPEL OPTICS --- nstep = ',get_nstep()
-            do k=1,pver
-               print '("LEVEL",i2,3x,"cldfprime = ",f12.6,2x,"CLD = ",f12.6,3x," CLDFSNOW = ",f12.6," Max(SNOW_TAU)",f12.6,3x," Max(TAU)=",f12.6)', k, cldfprime(1,k),cld(1,k),cldfsnow(1,k),maxval(snow_tau(:,1,k)),maxval(c_cld_tau(:,1,k))
-            end do
-         end if
-
          ! At this point we have cloud optical properties including snow and graupel,
          ! but they need to be re-ordered from the old RRTMG spectral bands to RRTMGP's
          !
@@ -1270,15 +1220,6 @@ subroutine radiation_tend( &
          c_cld_tau_w_g = c_cld_tau_w_g(rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
          c_cld_tau_w_f = c_cld_tau_w_f(rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
 
-
-         if (sad_debugging) then
-            print*,'--- Right AFTER BAND-REORDERING --- nstep = ',get_nstep()
-            print*,'Shape of c_cld_tau : ',shape(c_cld_tau)
-            do k=1,pver
-               print '("LEVEL",i2,3x,"cldfprime = ",f12.6,2x,"CLD = ",f12.6,3x," CLDFSNOW = ",f12.6," Max(SNOW_TAU)",f12.6,3x," Max(TAU)=",f12.6)', k, cldfprime(1,k),cld(1,k),cldfsnow(1,k),maxval(snow_tau(:,1,k)),maxval(c_cld_tau(:,1,k))
-            end do
-         end if
-
          ! cloud_sw : cloud optical properties.
          call initialize_rrtmgp_cloud_optics_sw(nday, nlay, kdist_sw, cloud_sw)
    
@@ -1286,7 +1227,7 @@ subroutine radiation_tend( &
             nswbands,              & ! input
             nday,                  & ! input
             nlay,                  & ! input
-            idxday,                & ! input
+            idxday(1:ncol),        & ! input, [require to truncate to 1 to ncol b/c the array is size pcol]
             pmid_day(:,nlay:1:-1), & ! input
             cldfprime,             & ! input
             c_cld_tau,             & ! input
@@ -1296,16 +1237,10 @@ subroutine radiation_tend( &
             kdist_sw,              & ! input
             cloud_sw               & ! inout, outputs %g, %ssa, %tau 
          )
-         if (sad_debugging) then
-            print*,'--- Right AFTER rrtmgp_set_cloud_sw --- nstep = ',get_nstep()
-            print*,'Shape of cloud_sw%tau : ', shape(cloud_sw%tau)
-            do k=1,pver
-               print '("LEVEL",i2,3x,"cldfprime = ",f12.6,2x," Max(TAU)=",f12.6,2x," Max(cloud_sw%tau)",f12.6)', k, cldfprime(1,k),maxval(c_cld_tau(:,1,k)),maxval(cloud_sw%tau(1,k,:))
-            end do
-         end if
+
          ! allocate object for aerosol optics
          errmsg = aer_sw%alloc_2str(nday, nlay, kdist_sw%get_band_lims_wavenumber(), &
-         name='shortwave aerosol optics') 
+                                    name='shortwave aerosol optics') 
          if (len_trim(errmsg) > 0) then
             call endrun(sub//': ERROR: aer_sw%alloc_2str: '//trim(errmsg))
          end if
@@ -1362,11 +1297,10 @@ subroutine radiation_tend( &
                                         pbuf,        & ! input 
                                         nlay,        & ! input
                                         nday,        & ! input
-                                        idxday,      & ! input
+                                        idxday,      & ! input [this is full array, but could be 1:nday]
                                         gas_concs_sw & ! inout ; will be bottom-to-top
                                        )
 
-               call t_startf('aeroptics')
                call aer_rad_props_sw(         & ! Get aerosol shortwave optical properties
                                  icall,       & ! input
                                  state,       & ! input
@@ -1390,12 +1324,16 @@ subroutine radiation_tend( &
                aer_tau_w(:, :, :)   = aer_tau_w(  :, :, rrtmg_to_rrtmgp_swbands)
                aer_tau_w_g(:, :, :) = aer_tau_w_g(:, :, rrtmg_to_rrtmgp_swbands)
                aer_tau_w_f(:, :, :) = aer_tau_w_f(:, :, rrtmg_to_rrtmgp_swbands)
-
                
                call rrtmgp_set_aer_sw( &
-                  nswbands, nday, idxday, aer_tau, aer_tau_w, &
-                  aer_tau_w_g, aer_tau_w_f, aer_sw)
-               call t_stopf('aeroptics')               
+                  nswbands,            &
+                  nday,                &
+                  idxday(1:nday),      &  ! required to truncate to 1:nday 
+                  aer_tau,             &
+                  aer_tau_w,           &
+                  aer_tau_w_g,         & 
+                  aer_tau_w_f,         &
+                  aer_sw)
                   
                ! Compute SW fluxes
          
@@ -1403,22 +1341,8 @@ subroutine radiation_tend( &
                call clipper(cloud_sw%tau, 0._r8, huge(cloud_sw%tau))
                call clipper(cloud_sw%ssa, 0._r8, 1._r8)
                call clipper(cloud_sw%g,  -1._r8, 1._r8)
-               call clipper(aer_sw%tau,   0._r8, huge(aer_sw%tau))
-               call clipper(aer_sw%ssa,   0._r8, 1._r8)
-               call clipper(aer_sw%g,    -1._r8, 1._r8)
 
-               if (sad_debugging) then
-                  ! bpm -- debugging -- Right here we need to have reasonable values going into RTE-RRTMGP
-                  print*,'--- Right before rte_sw --- (dosw = ',dosw,') nstep = ',get_nstep()
-                  print*,'--- pressure ref: ',kdist_sw%get_press_min(), ', ', kdist_sw%get_press_max()
-                  do k=1,size(t_day,2)
-                     print '("LEVEL",i2,3x," T_DAY = ",f12.4,"PMID_DAY = ",f12.4)', k,t_day(1,k),pmid_day(1,k)
-                  end do
-                  do k=1,size(pint_day,2)
-                     print '("(interface) LEVEL",i2,3x," PINT_DAY = ",f12.4)', k,pint_day(1,k)
-                  end do
-               end if
-               call t_startf('rad_sw')
+               ! inputs are the daylit columns --> output fluxes therefore also on daylit columns. 
                errmsg = rte_sw( kdist_sw,     & ! input (from init)
                                 gas_concs_sw, & ! input, (from rrtmgp_set_gases_sw)
                                 pmid_day,     & ! input, (from rrtmgp_set_state)
@@ -1436,23 +1360,6 @@ subroutine radiation_tend( &
                   call endrun(sub//': ERROR code returned by rte_sw: '//trim(errmsg))
                end if
 
-               if (sad_debugging) then
-                  ! bpm -- debugging -- 
-                  print*,'--- Right after rte_sw --- (dosw = ',dosw,')(ktopradi = ',ktopradi,') nstep = ',get_nstep()
-                  do k=1,size(fsw%flux_net,2)
-                     print '("LEVEL",i2,3x," SW_NET = ",f12.4," SW_NET_CLR = ",f12.4)', k,fsw%flux_net(1,k),fswc%flux_net(1,k)
-                  end do
-                  do k=1,size(fsw%flux_net,2)
-                     print '("LEVEL",i2,3x," SW_DOWN = ",f12.4," SW_DOWN_CLR = ",f12.4)', k,fsw%flux_dn(1,k),fswc%flux_dn(1,k)
-                  end do
-                  do k=1,size(fsw%flux_net,2)
-                     print '("LEVEL",i2,3x," SW_UP = ",f12.4," SW_UP_CLR = ",f12.4)', k,fsw%flux_up(1,k),fswc%flux_up(1,k)
-                  end do
-               end if
-               call t_startf('rad_sw')
-
-
-               call t_stopf('rad_sw')
 
                !
                ! -- shortwave output -- 
@@ -1461,12 +1368,7 @@ subroutine radiation_tend( &
                ! Transform RRTMGP outputs to CAM outputs
                ! - including fsw (W/m2) -> qrs (J/(kgK))
                call set_sw_diags()
-               if (sad_debugging) then
-                  print*,'--- Right after set_sw_diags --- (dosw = ',dosw,')(ktopradi = ',ktopradi,') nstep = ',get_nstep()
-                  do k=1,size(qrs,2)
-                     print '("LEVEL",i2,3x," QRS = ",f12.4," QRSC = ",f12.4)', k, qrs(1,k), rd%qrsc(i,k)
-                  end do
-               end if
+
                if (write_output) then
                   call radiation_output_sw(lchnk, ncol, icall, rd, pbuf, cam_out)  ! QRS = qrs/cpair; whatever qrs is in pbuf
                end if
@@ -1585,7 +1487,6 @@ subroutine radiation_tend( &
 !               end if
                call rrtmgp_set_gases_lw(icall, state, pbuf, nlay, gas_concs_lw)
 
-               call t_startf('aeroptics')
                call aer_rad_props_lw(              & ! get absorption optical depth
                                        icall,      & ! input
                                        state,      & ! input
@@ -1598,14 +1499,12 @@ subroutine radiation_tend( &
                                        aer_lw_abs, & ! input
                                        aer_lw      & ! output, %tau, ordered bottom-to-top
                                     )
-               call t_stopf('aeroptics')
                
                ! check that optical properties are in bounds:
                call clipper(cloud_lw%tau, 0._r8, huge(cloud_lw%tau))
                call clipper(aer_lw%tau,   0._r8, huge(aer_lw%tau))
                
                ! Compute LW fluxes
-               call t_startf('rad_lw')
 
                errmsg = rte_lw(kdist_lw,         & ! input
                                gas_concs_lw,     & ! input, (rrtmgp_set_gases_lw)
@@ -1623,7 +1522,6 @@ subroutine radiation_tend( &
                   call endrun(sub//': ERROR code returned by rte_lw: '//trim(errmsg))
                end if
 
-               call t_stopf('rad_lw')
                !
                ! -- longwave output --
                !
@@ -1717,7 +1615,6 @@ contains
 
       ! Transform RRTMGP output for CAM
       ! Uses the fluxes that come out of RRTMGP.
-      ! RRTMGP levels are bottom to top.  CAM levels are top to bottom.
 
       ! Expects fluxes on day columns, and expands to full columns.
 
@@ -1726,7 +1623,6 @@ contains
                           size(fsw%bnd_flux_dn,2), &
                           size(fsw%bnd_flux_dn,3)) :: flux_dn_diffuse
       !-------------------------------------------------------------------------
-
       fns  = 0._r8 ! net sw flux
       fcns = 0._r8 ! net sw clearsky flux
       fsds               = 0._r8 ! downward sw flux at surface
@@ -2891,7 +2787,7 @@ elemental subroutine clipper(scalar, minval, maxval)
       if (scalar < minval) then
          scalar = minval
       end if
-       if (scalar > maxval) then
+      if (scalar > maxval) then
          scalar = maxval
       end if
    end if
