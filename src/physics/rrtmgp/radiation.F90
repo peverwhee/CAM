@@ -817,7 +817,7 @@ subroutine radiation_tend( &
    !  chunk_column_index = IdxDay(daylight_column_index)
    integer :: Nday           ! Number of daylight columns
    integer :: Nnite          ! Number of night columns
-   integer :: IdxDay(pcols)  ! Indices of daylight columns
+   integer :: IdxDay(pcols)  ! Indices of daylight columns -- Dimension is pcols, and is filled from beginning, so idxday(1:nday) are the indices of daylit columns.
    integer :: IdxNite(pcols) ! Indices of night columns
 
    integer :: itim_old
@@ -938,7 +938,7 @@ subroutine radiation_tend( &
 
    character(len=*), parameter :: sub = 'radiation_tend'
 
-   logical :: conserve_energy = .true. ! Flag to carry (QRS,QRL)*dp across time steps. 
+   logical :: conserve_energy = .false. ! Flag to carry (QRS,QRL)*dp across time steps. 
 
    integer :: iband
    integer :: nlevcam, nlevrad
@@ -1325,6 +1325,8 @@ subroutine radiation_tend( &
                aer_tau_w_g(:, :, :) = aer_tau_w_g(:, :, rrtmg_to_rrtmgp_swbands)
                aer_tau_w_f(:, :, :) = aer_tau_w_f(:, :, rrtmg_to_rrtmgp_swbands)
                
+               ! Convert from the products to individual properties,
+               ! and only provide them on the daylit points.
                call rrtmgp_set_aer_sw( &
                   nswbands,            &
                   nday,                &
