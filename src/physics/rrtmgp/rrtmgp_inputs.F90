@@ -11,7 +11,6 @@ module rrtmgp_inputs
 ! as used by CAM's infrastructure.
 !
 !--------------------------------------------------------------------------------
-
 use shr_kind_mod,     only: r8=>shr_kind_r8
 use ppgrid,           only: pcols, pver, pverp
 
@@ -134,7 +133,6 @@ subroutine rrtmgp_set_state( &
    real(r8) :: bnd_irrad
    real(r8) :: solin_day(nday)
    real(r8) :: wavenumber_limits(2,nswbands)
-
    character(len=*), parameter :: sub='rrtmgp_set_state'
 
    !--------------------------------------------------------------------------------
@@ -145,11 +143,10 @@ subroutine rrtmgp_set_state( &
    emis_sfc = 1._r8
    ! Assume level ordering is the same for both CAM and RAD 
    ! There could be layers at the top that are not included in radiation, so work our way upward from the bottom.
-
    t_rad(:ncol, nlay:nlay-pver+1:-1)    = pstate%t(:ncol, pver:nlay-pver:-1)
    pmid_rad(:ncol, nlay:nlay+1-pver:-1) = pstate%pmid(:ncol, pver:nlay-pver:-1)  
-   pint_rad(:ncol, nlay+1:nlay+1-pver:-1) = pstate%pint(:ncol, pverp:nlay+1-pver:-1)
-   
+   pint_rad(:ncol, nlay+1:nlay+1-pver:-1) = pstate%pint(:ncol, pverp:nlay-pver:-1)
+
    if (nlay == pverp) then
       ! add midpoint and top interface values for extra layer
       t_rad(:,1)      = pstate%t(:ncol,1)
