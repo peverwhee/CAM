@@ -777,7 +777,8 @@ subroutine radiation_tend( &
 
    use mo_fluxes_byband,   only: ty_fluxes_byband
 
-   use mo_rrtmgp_clr_all_sky, only: rte_lw, rte_sw
+   ! use mo_rrtmgp_clr_all_sky, only: rte_lw, rte_sw
+   use rrtmgp_driver, only: rte_lw, rte_sw
 
    use radheat,            only: radheat_tend
 
@@ -1356,8 +1357,10 @@ subroutine radiation_tend( &
                                 cloud_sw,     & ! input, (from rrtmgp_set_cloud_sw)
                                 fsw,      & ! inout
                                 fswc,     & ! inout 
-                                aer_props=aer_sw, & ! optional input (from rrtmgp_set_aer_sw)
-                                tsi_scaling=eccf)   ! optional input
+                                aer_props=aer_sw) !,                   & ! optional input (from rrtmgp_set_aer_sw)
+               !                                    !tsi_scaling=eccf)   ! optional input
+
+
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_sw: '//trim(errmsg))
                end if
