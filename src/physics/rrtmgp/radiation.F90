@@ -52,6 +52,12 @@ use scamMod,             only: scm_crm_mode, single_column, have_cld, cldobs
 
 
 implicit none
+
+! bpm -- interface for checking array bounds
+interface check_bounds
+    module procedure check_bounds_1d, check_bounds_2d, check_bounds_3d, check_bounds_4d, check_bounds_5d
+end interface check_bounds
+
 private
 save
 
@@ -199,6 +205,85 @@ character(len=5), dimension(10) :: active_gases = (/ &
 contains
 !===============================================================================
 
+subroutine check_bounds_1d(arr, max_bound, min_bound, err_message)
+   real, dimension(:), intent(in) :: arr
+   real, intent(in) :: max_bound, min_bound
+   character(len=128), intent(out) :: err_message
+   real :: mx, mn
+   err_message=''
+   mx = maxval(arr)
+   mn = minval(arr)
+   if (mn < min_bound) then
+       err_message = "validate: array values too small "
+   end if
+   if (mx > max_bound ) then
+       err_message = "validate: array values too large"
+   end if
+end subroutine
+
+ subroutine check_bounds_2d(arr, max_bound, min_bound, err_message)
+   real, dimension(:,:), intent(in) :: arr
+   real, intent(in) :: max_bound, min_bound
+   character(len=128), intent(out) :: err_message
+   real :: mx, mn
+   err_message = ''
+   mx = maxval(arr)
+   mn = minval(arr)
+   if (mn < min_bound) then
+       err_message = "validate: array values too small "
+   end if
+   if (mx > max_bound ) then
+       err_message = "validate: array values too large"
+   end if
+ end subroutine
+
+ subroutine check_bounds_3d(arr, max_bound, min_bound, err_message)
+   real, dimension(:,:,:), intent(in) :: arr
+   real, intent(in) :: max_bound, min_bound
+   character(len=128), intent(out) :: err_message
+   real :: mx, mn
+   err_message =  ''
+   mx = maxval(arr)
+   mn = minval(arr)
+   if (mn < min_bound) then
+       err_message = "validate: array values too small "
+   end if
+   if (mx > max_bound ) then
+       err_message = "validate: array values too large"
+   end if
+end subroutine
+
+ subroutine check_bounds_4d(arr, max_bound, min_bound, err_message)
+   real, dimension(:,:,:,:), intent(in) :: arr
+   real, intent(in) :: max_bound, min_bound
+   character(len=128), intent(out) :: err_message
+   real :: mx, mn
+   err_message = ''
+   mx = maxval(arr)
+   mn = minval(arr)
+   if (mn < min_bound) then
+       err_message = "validate: array values too small "
+   end if
+   if (mx > max_bound ) then
+       err_message = "validate: array values too large"
+   end if
+ end subroutine
+
+ subroutine check_bounds_5d(arr, max_bound, min_bound, err_message)
+   real, dimension(:,:,:,:,:), intent(in) :: arr
+   real, intent(in) :: max_bound, min_bound
+   character(len=128), intent(out) :: err_message
+   real :: mx, mn
+   err_message = ''
+   mx = maxval(arr)
+   mn = minval(arr)
+   if (mn < min_bound) then
+       err_message = "validate: array values too small "
+   end if
+   if (mx > max_bound ) then
+       err_message = "validate: array values too large"
+   end if
+ end subroutine
 
 subroutine radiation_readnl(nlfile)
 
@@ -2797,6 +2882,7 @@ elemental subroutine clipper(scalar, minval, maxval)
       end if
    end if
 end subroutine clipper
+
 
 end module radiation
 

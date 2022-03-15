@@ -34,6 +34,9 @@ use mo_optical_props, only: ty_optical_props, ty_optical_props_2str, ty_optical_
 use cam_logfile,         only: iulog
 use cam_abortutils,   only: endrun
 
+use cam_history,     only: outfld  ! just for getting ozone VMR above model top.
+
+
 implicit none
 private
 save
@@ -143,21 +146,32 @@ subroutine rrtmgp_set_state( &
 
    ! Set surface emissivity to 1.0 here, this is treated in land surface model??
    emis_sfc = 1._r8
-   ! Assume level ordering is the same for both CAM and RAD 
-   ! There could be layers at the top that are not included in radiation, so work our way upward from the bottom.
 
-   t_rad(:ncol, nlay:nlay-pver+1:-1)    = pstate%t(:ncol, pver:nlay-pver:-1)
-   pmid_rad(:ncol, nlay:nlay+1-pver:-1) = pstate%pmid(:ncol, pver:nlay-pver:-1)  
-   pint_rad(:ncol, nlay+1:nlay+1-pver:-1) = pstate%pint(:ncol, pverp:nlay+1-pver:-1)
+   ! Assume level ordering is the same for both CAM and RAD (top to bottom)
+   if (nlay == pver) then
+      t_rad(:ncol, :) = pstate%t(:ncol, :)
+      pmid_rad(:ncol, :) = pstate%pmid(:ncol, :)
+      pint_rad(:ncol, :) = pstate%pint(:ncol, :)
+   else if (nlay < pver) then
+      t_rad(:ncol, :) = pstate%t(:ncol, pver-nlay+1:pver)
+      pmid_rad(:ncol, :) = pstate%pmid(:ncol, pver-nlay+1:pver)
+      pint_rad(:ncol, :) = pstate%pint(:ncol, pver-nlay+1:pverp)
+   else if (nlay > pver) then
+      t_rad(:ncol, nlay-pver+1:)    = pstate%t(:ncol, :)
+      pmid_rad(:ncol, nlay-pver+1:) = pstate%pmid(:ncol, :)
+      pint_rad(:ncol, nlay-pver+1:) = pstate%pint(:ncol, :)
+   end if
+
    
    if (nlay == pverp) then
       ! add midpoint and top interface values for extra layer
       t_rad(:,1)      = pstate%t(:ncol,1)
       pmid_rad(:,1)   = 0.5_r8 * pstate%pint(:ncol,1)
 
-      ! pint_rad(:,nlay+1) = 1.e-2_r8 ! rrtmg value
-      pint_rad(:,1) = 1.01_r8
-
+      ! pint_rad(:,nlay+1) = 1.e-2_r8 ! rrtmg value (in hPa?)
+      pint_rad(:,1) = 1.01_r8         ! in Pa
+   else if (nlay > pverp) then
+      call endrun(sub//': ERROR: radiation should not have more layers than CAM has interfaces')
    end if
 
    ! properties needed at day columns
@@ -312,20 +326,32 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    real(r8), pointer     :: gas_mmr(:,:)
    real(r8), allocatable :: gas_vmr(:,:)
-
+   real(r8), allocatable :: P_int(:), P_mid(:), alpha(:), beta(:), a(:), b(:), chi_mid(:), chi_0(:), chi_eff(:)
+   real(r8) :: P_top
+   integer :: lchnk
    character(len=128)          :: errmsg
    character(len=*), parameter :: sub = 'rrtmgp_set_gases_lw'
    integer :: i
    !--------------------------------------------------------------------------------
 
    ncol = pstate%ncol
+   lchnk = pstate%lchnk
 
    ! allocate array to pass to RRTMGP gas description object
    allocate(gas_vmr(ncol,nlay))
+   allocate(P_int(ncol), P_mid(ncol), alpha(ncol), beta(ncol), a(ncol), b(ncol), chi_mid(ncol), chi_0(ncol), chi_eff(ncol))
 
    ! Access gas mmr from CAM data structures.  Subset and convert mmr -> vmr.
-   ! If an extra layer is used copy the mixing ratios from CAM's top model layer.
    ! Assume levels are in same order for CAM and RAD.
+   ! If an extra layer is used copy the mixing ratios from CAM's top model layer.
+   ! EXEPT OZONE:
+   ! """
+      ! For the purpose of attenuating solar fluxes above the CAM model top, we assume that ozone 
+      ! mixing decreases linearly in each column from the value in the top layer of CAM to zero at 
+      ! the pressure level set by P_top. P_top has been set to 50 Pa (0.5 hPa) based on model tuning 
+      ! to produce temperatures at the top of CAM that are most consistent with WACCM at similar pressure levels. 
+   ! """
+
 
    ! H20
    call rad_cnst_get_gas(icall, 'H2O', pstate, pbuf, gas_mmr)
@@ -357,7 +383,32 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    call rad_cnst_get_gas(icall, 'O3',  pstate, pbuf, gas_mmr)
    gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdo
    if (nlay == pverp) then
-      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
+      ! gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
+      !!! SPECIAL CASE FOR OZONE:
+      P_top = 50.0_r8                     ! pressure (Pa) at which we assume O3 = 0 in linear decay from CAM top
+      P_int(:ncol) = pstate%pint(:ncol,1) ! pressure (Pa) at upper interface of CAM
+      P_mid(:ncol) = pstate%pmid(:ncol,1) ! pressure (Pa) at midpoint of top layer of CAM
+      alpha(:) = 0.0_r8
+      beta(:) = 0.0_r8
+      alpha(:ncol) = log(P_int(:ncol)/P_top)
+      beta(:ncol) =  log(P_mid(:ncol)/P_int(:ncol))/log(P_mid(:ncol)/P_top)
+  
+      a(:ncol) =  ( (1._r8 + alpha(:ncol)) * exp(-alpha(:ncol)) - 1._r8 ) / alpha(:ncol)
+      b(:ncol) =  1_r8 - exp(-alpha(:ncol))
+  
+      where(alpha .gt. 0)                               ! only apply where top level is below 80 km
+        chi_mid(:) = gas_mmr(:, nlay+1-pver)*amdo       ! molar mixing ratio of O3 at midpoint of top layer
+        chi_0(:) = chi_mid(:) /  (1._r8 + beta(:))
+        chi_eff(:) = chi_0(:) * (a(:) + b(:))
+        gas_vmr(:,1) = chi_eff(:)
+        chi_eff(:) = chi_eff(:) * P_int(:) / amdo / 9.8_r8 ! O3 column above in kg m-2
+        chi_eff(:) = chi_eff(:) / 2.1415e-5_r8             ! O3 column above in DU
+      endwhere
+      
+      ! call outfld('O3colAbove', chi_eff(:ncol), pcols, lchnk)  ! Output here so all columns (not just daylit)
+      ! * apparently not in the master field list in CAM6 w/ RRTMGP ... Should it be added?
+      ! * Is there a ncol vs pcols issue here?
+      !!!
    end if   
 
    errmsg = gas_concs%set_vmr('o3', gas_vmr)
@@ -420,6 +471,7 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
    if (len_trim(errmsg) > 0) call endrun(sub//': error setting CFC12: '//trim(errmsg))
 
    deallocate(gas_vmr)
+   deallocate(P_int, P_mid, alpha, beta, a, b, chi_mid, chi_0, chi_eff)
 
 end subroutine rrtmgp_set_gases_lw
 
@@ -429,8 +481,9 @@ subroutine rrtmgp_set_gases_sw( &
    icall, pstate, pbuf, nlay, nday, &
    idxday, gas_concs)
 
-   ! The gases in the LW coefficients file are:
-   ! H2O, CO2, O3, N2O, CO, CH4, O2, N2
+   ! The gases in the SW coefficients file are:
+   ! H2O, CO2, O3, N2O, CO, CH4, O2, N2, CCL4, CFC11, CFC12, CFC22, HFC143a,
+   ! HFC125, HFC23, HFC32, HFC134a, CF4, NO2
 
    ! arguments
    integer,                     intent(in)    :: icall      ! index of climate/diagnostic radiation call
@@ -446,7 +499,8 @@ subroutine rrtmgp_set_gases_sw( &
 
    real(r8), pointer     :: gas_mmr(:,:)
    real(r8), allocatable :: gas_vmr(:,:)
-
+   real(r8), allocatable :: P_int(:), P_mid(:), alpha(:), beta(:), a(:), b(:), chi_mid(:), chi_0(:), chi_eff(:)
+   real(r8) :: P_top
    character(len=128)          :: errmsg
    character(len=*), parameter :: sub = 'rrtmgp_set_gases_sw'
    !--------------------------------------------------------------------------------
@@ -455,9 +509,19 @@ subroutine rrtmgp_set_gases_sw( &
 
    ! allocate array to pass to RRTMGP gas description object
    allocate(gas_vmr(nday,nlay))
+   allocate(P_int(nday), P_mid(nday), alpha(nday), beta(nday), a(nday), b(nday), chi_mid(nday), chi_0(nday), chi_eff(nday))
 
    ! Access gas mmr from CAM data structures.  Subset and convert mmr -> vmr.
    ! If an extra layer is used copy the mixing ratios from CAM's top model layer.
+   ! ** EXCEPT: Ozone, which follows from RRTMG:
+   ! """
+      ! For the purpose of attenuating solar fluxes above the CAM model top, we assume that ozone 
+      ! mixing decreases linearly in each column from the value in the top layer of CAM to zero at 
+      ! the pressure level set by P_top. P_top has been set to 50 Pa (0.5 hPa) based on model tuning 
+      ! to produce temperatures at the top of CAM that are most consistent with WACCM at similar pressure levels. 
+   ! """
+
+   ! write(iulog,*) '['//sub//'] idxday: ',idxday(1:nday)
   
    ! This could be condensed by making a function, and more robust by using a list of gases.
 
@@ -493,10 +557,31 @@ subroutine rrtmgp_set_gases_sw( &
    call rad_cnst_get_gas(icall, 'O3',  pstate, pbuf, gas_mmr)
    do i = 1, nday
       gas_vmr(i,nlay+1-pver:) = gas_mmr(idxday(i), :pver)*amdo
+      if (nlay == pverp) then
+         ! gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
+         !!! SPECIAL CASE FOR OZONE:
+         P_top = 50.0_r8                     ! pressure (Pa) at which we assume O3 = 0 in linear decay from CAM top
+         P_int(i) = pstate%pint(idxday(i),1) ! pressure (Pa) at upper interface of CAM
+         P_mid(i) = pstate%pmid(idxday(i),1) ! pressure (Pa) at midpoint of top layer of CAM
+         alpha(i) = 0.0_r8
+         beta(i) = 0.0_r8
+         alpha(i) = log(P_int(i)/P_top)
+         beta(i) =  log(P_mid(i)/P_int(i))/log(P_mid(i)/P_top)
+   
+         a(i) =  ( (1._r8 + alpha(i)) * exp(-alpha(i)) - 1._r8 ) / alpha(i)
+         b(i) =  1._r8 - exp(-alpha(i))
+
+         if (alpha(i) .gt. 0) then                    ! only apply where top level is below 80 km
+            chi_mid(i) = gas_mmr(i,1)*amdo          ! molar mixing ratio of O3 at midpoint of top layer
+            chi_0(i) = chi_mid(i) /  (1._r8 + beta(i))
+            chi_eff(i) = chi_0(i) * (a(i) + b(i))
+            gas_vmr(i,1) = chi_eff(i)
+            chi_eff(i) = chi_eff(i) * P_int(i) / amdo / 9.8_r8 ! O3 column above in kg m-2
+            chi_eff(i) = chi_eff(i) / 2.1415e-5_r8             ! O3 column above in DU
+         end if
+         !!!
+      end if
    end do
-   if (nlay == pverp) then
-      gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
-   end if
    errmsg = gas_concs%set_vmr('o3', gas_vmr)
    if (len_trim(errmsg) > 0) then
       call endrun(sub//': error setting O3: '//trim(errmsg))
@@ -580,6 +665,7 @@ subroutine rrtmgp_set_gases_sw( &
    end if
 
    deallocate(gas_vmr)
+   deallocate(P_int, P_mid, alpha, beta, a, b, chi_mid, chi_0, chi_eff)
 
 end subroutine rrtmgp_set_gases_sw
 
