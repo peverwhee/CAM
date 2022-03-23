@@ -35,7 +35,7 @@ use cam_logfile,         only: iulog
 use cam_abortutils,   only: endrun
 
 use cam_history,     only: outfld  ! just for getting ozone VMR above model top.
-
+use b_checker, only: assert_shape ! checking on shapes
 
 implicit none
 private
@@ -139,13 +139,36 @@ subroutine rrtmgp_set_state( &
    real(r8) :: wavenumber_limits(2,nswbands)
 
    character(len=*), parameter :: sub='rrtmgp_set_state'
-
+   character(len=512) :: errmsg
    !--------------------------------------------------------------------------------
 
-   t_sfc = sqrt(sqrt(cam_in%lwup(:ncol)/stebol))
+   !
+   ! bpm note: the size of pstate%t 's 1st dimension can be larger than ncol. Assume we are only interested in 1:ncol.
+   !
+   ! call assert_shape(pstate%t, (/ncol, pver/), errmsg)
+   ! if (len_trim(errmsg) > 0) then
+   !    write(iulog,*) '['//sub//'] : pstate%t -- shape: ',SHAPE(pstate%t),'[EXPECTED: (',ncol,'x',pver,')] max: ',maxval(pstate%t),' min: ',minval(pstate%t)
+   !    call endrun(sub//trim(errmsg))
+   ! end if
+   ! call assert_shape(pstate%pmid, (/ncol, pver/), errmsg)
+   ! if (len_trim(errmsg) > 0) then
+   !    write(iulog,*) '['//sub//'] : pstate%pmid -- shape: ',SHAPE(pstate%pmid),' max: ',maxval(pstate%pmid),' min: ',minval(pstate%pmid)
+   !    call endrun(sub//trim(errmsg))
+   ! end if
+   ! call assert_shape(pstate%pint, (/ncol, pverp/), errmsg)
+   ! if (len_trim(errmsg) > 0) then
+   !    write(iulog,*) '['//sub//'] : pstate%pint -- shape: ',SHAPE(pstate%pint),' max: ',maxval(pstate%pint),' min: ',minval(pstate%pint)
+   !    call endrun(sub//trim(errmsg))
+   ! end if
 
-   ! Set surface emissivity to 1.0 here, this is treated in land surface model??
-   emis_sfc = 1._r8
+   t_sfc = sqrt(sqrt(cam_in%lwup(:ncol)/stebol))  ! Surface temp set based on longwave up flux.
+
+   ! Set surface emissivity to 1.0.
+   ! The land model *does* have its own surface emissivity, but is not spectrally resolved.
+   ! The LW upward flux is calculated with that land emissivity, and the "radiative temperature" t_sfc is derived
+   ! from that flux. We assume, therefore, that the emissivity is unity to be consistent with t_sfc.
+   emis_sfc(:,:) = 1._r8
+
 
    ! Assume level ordering is the same for both CAM and RAD (top to bottom)
    if (nlay == pver) then
@@ -355,6 +378,13 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    ! H20
    call rad_cnst_get_gas(icall, 'H2O', pstate, pbuf, gas_mmr)
+
+   call assert_shape(gas_mmr, (/pcols, pver/), errmsg)
+   if (len_trim(errmsg) > 0) then
+      write(iulog,*) 'H2O gas_mmr shape: ',SHAPE(gas_mmr)
+      call endrun(sub//': ERROR: H2O gas_mmr does not have expected shape.'//trim(errmsg))
+   end if
+
    ! water vapor represented as specific humidity in CAM 
    ! gas_vmr goes bottom to top (assumed radiation convention), 
    ! but gas_mmr goes top to bottom (CAM convention)
@@ -371,6 +401,11 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    ! CO2
    call rad_cnst_get_gas(icall, 'CO2', pstate, pbuf, gas_mmr)
+   call assert_shape(gas_mmr, (/pcols, pver/), errmsg)
+   if (len_trim(errmsg) > 0) then
+      call endrun(sub//': ERROR: CO2 gas_mmr does not have expected shape'//trim(errmsg))
+   end if
+
    gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdc
    if (nlay == pverp) then
       gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
@@ -381,6 +416,13 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
 
    ! O3
    call rad_cnst_get_gas(icall, 'O3',  pstate, pbuf, gas_mmr)
+
+   call assert_shape(gas_mmr, (/pcols, pver/), errmsg)
+   if (len_trim(errmsg) > 0) then
+      write(iulog,*) 'O3 gas_mmr shape: ',SHAPE(gas_mmr)
+      call endrun(sub//': ERROR: O3 gas_mmr does not have expected shape.'//trim(errmsg))
+   end if
+
    gas_vmr(:ncol,nlay+1-pver:) = gas_mmr(:ncol,:pver)*amdo
    if (nlay == pverp) then
       ! gas_vmr(:,1) = gas_vmr(:,nlay+1-pver) 
@@ -397,10 +439,10 @@ subroutine rrtmgp_set_gases_lw(icall, pstate, pbuf, nlay, gas_concs)
       b(:ncol) =  1_r8 - exp(-alpha(:ncol))
   
       where(alpha .gt. 0)                               ! only apply where top level is below 80 km
-        chi_mid(:) = gas_mmr(:, nlay+1-pver)*amdo       ! molar mixing ratio of O3 at midpoint of top layer
+        chi_mid(:) = gas_mmr(:ncol, nlay+1-pver)*amdo       ! molar mixing ratio of O3 at midpoint of top layer
         chi_0(:) = chi_mid(:) /  (1._r8 + beta(:))
         chi_eff(:) = chi_0(:) * (a(:) + b(:))
-        gas_vmr(:,1) = chi_eff(:)
+        gas_vmr(:ncol,1) = chi_eff(:)
         chi_eff(:) = chi_eff(:) * P_int(:) / amdo / 9.8_r8 ! O3 column above in kg m-2
         chi_eff(:) = chi_eff(:) / 2.1415e-5_r8             ! O3 column above in DU
       endwhere
@@ -481,6 +523,8 @@ subroutine rrtmgp_set_gases_sw( &
    icall, pstate, pbuf, nlay, nday, &
    idxday, gas_concs)
 
+   ! Return gas_concs with gas volume mixing ratio on DAYLIT columns.
+
    ! The gases in the SW coefficients file are:
    ! H2O, CO2, O3, N2O, CO, CH4, O2, N2, CCL4, CFC11, CFC12, CFC22, HFC143a,
    ! HFC125, HFC23, HFC32, HFC134a, CF4, NO2
@@ -505,7 +549,7 @@ subroutine rrtmgp_set_gases_sw( &
    character(len=*), parameter :: sub = 'rrtmgp_set_gases_sw'
    !--------------------------------------------------------------------------------
 
-   ncol = pstate%ncol
+   ! ncol = pstate%ncol ! ncol not needed because only daylit columns are used.
 
    ! allocate array to pass to RRTMGP gas description object
    allocate(gas_vmr(nday,nlay))

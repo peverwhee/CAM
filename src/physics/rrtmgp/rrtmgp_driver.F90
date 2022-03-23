@@ -21,17 +21,23 @@
 !
 module rrtmgp_driver
   use mo_rte_kind,   only: wp
-  use mo_gas_optics, only: ty_gas_optics
-  use mo_gas_concentrations, &
-                        only: ty_gas_concs
-  use mo_optical_props, only: ty_optical_props, &
-                              ty_optical_props_arry, ty_optical_props_1scl, ty_optical_props_2str, ty_optical_props_nstr
-  use mo_source_functions, &
-                        only: ty_source_func_lw
-  use mo_fluxes,        only: ty_fluxes              ! maybe not needed for CAM if we just use mo_fluxes_byband
+  ! use mo_gas_optics, only: ty_gas_optics  ! replacing this with _rrtmgp version
+
+  use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
+
+  use mo_gas_concentrations, only: ty_gas_concs
+  use mo_optical_props, only: ty_optical_props,      &
+                              ty_optical_props_arry, &
+                              ty_optical_props_1scl, &
+                              ty_optical_props_2str, &
+                              ty_optical_props_nstr
+  use mo_source_functions,  only: ty_source_func_lw
+  use mo_fluxes,            only: ty_fluxes   ! maybe not needed for CAM if we just use mo_fluxes_byband
   use mo_fluxes_byband,   only: ty_fluxes_byband  
   use mo_rte_lw,        only: base_rte_lw => rte_lw
   use mo_rte_sw,        only: base_rte_sw => rte_sw
+
+  use cam_logfile,         only: iulog
 
   implicit none
   private
@@ -48,14 +54,16 @@ contains
                      t_sfc, sfc_emis, cloud_props,           &
                      allsky_fluxes, clrsky_fluxes,           &
                      aer_props, col_dry, t_lev, inc_flux, n_gauss_angles) result(error_msg)
-    class(ty_gas_optics),              intent(in   ) :: k_dist       !< derived type with spectral information
+    ! class(ty_gas_optics),              intent(in   ) :: k_dist       !< derived type with spectral information
+    class(ty_gas_optics_rrtmgp),       intent(in   ) :: k_dist       !< derived type with spectral information
+
     type(ty_gas_concs),                intent(in   ) :: gas_concs    !< derived type encapsulating gas concentrations
     real(wp), dimension(:,:),          intent(in   ) :: p_lay, t_lay !< pressure [Pa], temperature [K] at layer centers (ncol,nlay)
     real(wp), dimension(:,:),          intent(in   ) :: p_lev        !< pressure at levels/interfaces [Pa] (ncol,nlay+1)
     real(wp), dimension(:),            intent(in   ) :: t_sfc     !< surface temperature           [K]  (ncol)
     real(wp), dimension(:,:),          intent(in   ) :: sfc_emis  !< emissivity at surface         []   (nband, ncol)
     class(ty_optical_props_arry),      intent(in   ) :: cloud_props !< cloud optical properties (ncol,nlay,ngpt)
-    class(ty_fluxes),                  intent(inout) :: allsky_fluxes, clrsky_fluxes
+    class(ty_fluxes_byband),                  intent(inout) :: allsky_fluxes, clrsky_fluxes ! 3/21 - _byband bpm
 
     ! Optional inputs
     class(ty_optical_props_arry),  &
@@ -79,6 +87,9 @@ contains
     ! --------------------------------
     ! Problem sizes
     !
+    
+    write(iulog,*) '** INSIDE rte_lw (1)--> start setup'
+
     error_msg = ""
 
     ncol  = size(p_lay, 1)
@@ -86,11 +97,15 @@ contains
     ngpt  = k_dist%get_ngpt()
     nband = k_dist%get_nband()
 
+    write(iulog,*) '** INSIDE rte_lw (2)--> ncol: ',ncol, ', nlay: ', nlay,', ngpt: ',ngpt,', nband: ',nband
+
     !$acc kernels copyout(top_at_1)
     !$omp target map(from:top_at_1)
     top_at_1 = p_lay(1, 1) < p_lay(1, nlay)
     !$acc end kernels
     !$omp end target
+
+    write(iulog,*) '** INSIDE rte_lw (3) --> top_at_1= ',top_at_1
 
     ! ------------------------------------------------------------------------------------
     !  Error checking
@@ -103,11 +118,15 @@ contains
         error_msg = "rrtmpg_lw: aerosol properties inconsistently sized"
     end if
 
+    write(iulog,*) '** INSIDE rte_lw --> past aerosol property check'
+
     if(present(t_lev)) then
       if(any([size(t_lev, 1), &
               size(t_lev, 2)] /= [ncol, nlay+1])) &
         error_msg = "rrtmpg_lw: t_lev inconsistently sized"
     end if
+
+    write(iulog,*) '** INSIDE rte_lw --> past t_lev consistency check'
 
     if(present(inc_flux)) then
       if(any([size(inc_flux, 1), &
@@ -115,6 +134,8 @@ contains
         error_msg = "rrtmpg_lw: incident flux inconsistently sized"
     end if
     if(len_trim(error_msg) > 0) return
+
+    write(iulog,*) '** INSIDE rte_lw --> past incident flux consistency check'
 
     ! ------------------------------------------------------------------------------------
     ! Optical properties arrays
@@ -129,17 +150,26 @@ contains
         nstr = size(cloud_props%tau,1)
     end select
 
+    write(iulog,*) '** INSIDE rte_lw --> past cloud properties check'
+
     error_msg = optical_props%init(k_dist)
+
+    write(iulog,*) '**^ INSIDE rte_lw optical properties init --> error_msg: ',error_msg
+
     if(len_trim(error_msg) > 0) return
     select type (optical_props)
       class is (ty_optical_props_1scl) ! No scattering
         error_msg = optical_props%alloc_1scl(ncol, nlay)
+        write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_1scl) --> error_msg: ',error_msg
       class is (ty_optical_props_2str)
         error_msg = optical_props%alloc_2str(ncol, nlay)
+        write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_2str) --> error_msg: ',error_msg
       class is (ty_optical_props_nstr)
         error_msg = optical_props%alloc_nstr(nstr, ncol, nlay)
-    end select
+        write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_nstr) --> error_msg: ',error_msg
+      end select
     if (error_msg /= '') return
+    write(iulog,*) '** INSIDE rte_lw --> past optical properties check.'
 
     !
     ! Source function
@@ -147,6 +177,12 @@ contains
     error_msg = sources%init(k_dist)
     error_msg = sources%alloc(ncol, nlay)
     if (error_msg /= '') return
+
+    write(iulog,*) '** INSIDE rte_lw --> source function initialized/allocated'
+
+    write(iulog,*) '^^^ rte_lw --> inputs to %gas_optics():',' *TBD* '
+
+
     ! ------------------------------------------------------------------------------------
     ! Clear skies
     !
@@ -158,6 +194,9 @@ contains
     if (error_msg /= '') then
         return
     end if
+
+    write(iulog,*) '** INSIDE rte_lw --> gas optics done'
+
     ! ----------------------------------------------------
     ! Clear sky is gases + aerosols (if they're supplied)
     !
@@ -168,24 +207,37 @@ contains
         return
     end if
 
+
+    write(iulog,*) 'rte_lw --> setup done and now to base_rte_lw (clear-sky) '
+
     error_msg = base_rte_lw(optical_props, top_at_1, sources, &
                             sfc_emis, clrsky_fluxes,          &
                             inc_flux, n_gauss_angles)
     if (error_msg /= '') then
         return
     end if
+
+    write(iulog,*) 'rte_lw --> base_rte_lw (clear-sky) COMPLETE'
+
     ! ------------------------------------------------------------------------------------
     ! All-sky fluxes = clear skies + clouds
     !
     error_msg = cloud_props%increment(optical_props)
     if(error_msg /= '') return
 
+    write(iulog,*) 'rte_lw --> continue to base_rte_lw (all-sky) '
+
     error_msg = base_rte_lw(optical_props, top_at_1, sources, &
                             sfc_emis, allsky_fluxes,          &
                             inc_flux, n_gauss_angles)
 
+    write(iulog,*) 'rte_lw --> base_rte_lw (all-sky) COMPLETE'
+
     call sources%finalize()
     call optical_props%finalize()
+
+    write(iulog,*) 'rte_lw (rrtmgp_driver) COMPLETE.'
+
   end function rte_lw
   ! --------------------------------------------------  
   ! --------------------------------------------------
@@ -194,7 +246,9 @@ contains
                                  mu0, sfc_alb_dir, sfc_alb_dif, cloud_props, &
                                  allsky_fluxes, clrsky_fluxes,           &
                                  aer_props, col_dry, inc_flux) result(error_msg)
-    class(ty_gas_optics),              intent(in   ) :: k_dist       !< derived type with spectral information
+    ! class(ty_gas_optics),              intent(in   ) :: k_dist       !< derived type with spectral information
+    class(ty_gas_optics_rrtmgp),       intent(in   ) :: k_dist       !< derived type with spectral information
+    
     type(ty_gas_concs),                intent(in   ) :: gas_concs    !< derived type encapsulating gas concentrations
     real(wp), dimension(:,:),          intent(in   ) :: p_lay, t_lay !< pressure [Pa], temperature [K] at layer centers (ncol,nlay)
     real(wp), dimension(:,:),          intent(in   ) :: p_lev        !< pressure at levels/interfaces [Pa] (ncol,nlay+1)
@@ -222,6 +276,9 @@ contains
     ! --------------------------------
     ! Problem sizes
     !
+
+    write(iulog,*) '** INSIDE rte_sw --> start setup'
+
     error_msg = ""
 
     ncol  = size(p_lay, 1)

@@ -49,14 +49,10 @@ use cam_abortutils,      only: endrun
 use error_messages,      only: handle_err
 use cam_logfile,         only: iulog
 use scamMod,             only: scm_crm_mode, single_column, have_cld, cldobs
-
+use b_checker,           only: check_bounds
 
 implicit none
 
-! bpm -- interface for checking array bounds
-interface check_bounds
-    module procedure check_bounds_1d, check_bounds_2d, check_bounds_3d, check_bounds_4d, check_bounds_5d
-end interface check_bounds
 
 private
 save
@@ -205,85 +201,6 @@ character(len=5), dimension(10) :: active_gases = (/ &
 contains
 !===============================================================================
 
-subroutine check_bounds_1d(arr, max_bound, min_bound, err_message)
-   real, dimension(:), intent(in) :: arr
-   real, intent(in) :: max_bound, min_bound
-   character(len=128), intent(out) :: err_message
-   real :: mx, mn
-   err_message=''
-   mx = maxval(arr)
-   mn = minval(arr)
-   if (mn < min_bound) then
-       err_message = "validate: array values too small "
-   end if
-   if (mx > max_bound ) then
-       err_message = "validate: array values too large"
-   end if
-end subroutine
-
- subroutine check_bounds_2d(arr, max_bound, min_bound, err_message)
-   real, dimension(:,:), intent(in) :: arr
-   real, intent(in) :: max_bound, min_bound
-   character(len=128), intent(out) :: err_message
-   real :: mx, mn
-   err_message = ''
-   mx = maxval(arr)
-   mn = minval(arr)
-   if (mn < min_bound) then
-       err_message = "validate: array values too small "
-   end if
-   if (mx > max_bound ) then
-       err_message = "validate: array values too large"
-   end if
- end subroutine
-
- subroutine check_bounds_3d(arr, max_bound, min_bound, err_message)
-   real, dimension(:,:,:), intent(in) :: arr
-   real, intent(in) :: max_bound, min_bound
-   character(len=128), intent(out) :: err_message
-   real :: mx, mn
-   err_message =  ''
-   mx = maxval(arr)
-   mn = minval(arr)
-   if (mn < min_bound) then
-       err_message = "validate: array values too small "
-   end if
-   if (mx > max_bound ) then
-       err_message = "validate: array values too large"
-   end if
-end subroutine
-
- subroutine check_bounds_4d(arr, max_bound, min_bound, err_message)
-   real, dimension(:,:,:,:), intent(in) :: arr
-   real, intent(in) :: max_bound, min_bound
-   character(len=128), intent(out) :: err_message
-   real :: mx, mn
-   err_message = ''
-   mx = maxval(arr)
-   mn = minval(arr)
-   if (mn < min_bound) then
-       err_message = "validate: array values too small "
-   end if
-   if (mx > max_bound ) then
-       err_message = "validate: array values too large"
-   end if
- end subroutine
-
- subroutine check_bounds_5d(arr, max_bound, min_bound, err_message)
-   real, dimension(:,:,:,:,:), intent(in) :: arr
-   real, intent(in) :: max_bound, min_bound
-   character(len=128), intent(out) :: err_message
-   real :: mx, mn
-   err_message = ''
-   mx = maxval(arr)
-   mn = minval(arr)
-   if (mn < min_bound) then
-       err_message = "validate: array values too small "
-   end if
-   if (mx > max_bound ) then
-       err_message = "validate: array values too large"
-   end if
- end subroutine
 
 subroutine radiation_readnl(nlfile)
 
@@ -1384,7 +1301,7 @@ subroutine radiation_tend( &
                                         nlay,        & ! input
                                         nday,        & ! input
                                         idxday,      & ! input [this is full array, but could be 1:nday]
-                                        gas_concs_sw & ! inout ; will be bottom-to-top
+                                        gas_concs_sw & ! inout ; will be bottom-to-top  !! concentrations will be size ncol, but only 1:nday should be used
                                        )
 
                call aer_rad_props_sw(         & ! Get aerosol shortwave optical properties
@@ -1430,6 +1347,48 @@ subroutine radiation_tend( &
                call clipper(cloud_sw%ssa, 0._r8, 1._r8)
                call clipper(cloud_sw%g,  -1._r8, 1._r8)
 
+               ! CHECK BOUNDS OF ARRAYS:
+               errmsg = cloud_sw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds cloud_sw: '//trim(errmsg))
+               end if
+               errmsg = aer_sw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds aer_sw: '//trim(errmsg))
+               end if
+               call check_bounds(alb_dir, 1.0_r8, 0.0_r8, errmsg)
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds alb_dir: '//trim(errmsg))
+               end if
+               call check_bounds(alb_dif, 1.0_r8, 0.0_r8, errmsg)
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds alb_dif: '//trim(errmsg))
+               end if
+               call check_bounds(coszrs_day, 1.0_r8, 0.0_r8, errmsg)
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds coszrs_day: '//trim(errmsg))
+               end if
+               call check_bounds(pint_day, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds pint_day: '//trim(errmsg))
+               end if
+               call check_bounds(t_day, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds t_day: '//trim(errmsg))
+               end if
+               call check_bounds(pmid_day, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds pint_day: '//trim(errmsg))
+               end if
+               ! Still to validate:
+               ! - kdist_sw
+               ! - gas_concs_sw
+               call check_bounds(gas_concs_sw, errmsg)
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds gas_concs_sw: '//trim(errmsg))
+               end if
+               ! call check_bounds(kdist_sw, errmsg)
+               write(iulog,*) 'Radiation_Tend about to start rte_sw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
                ! inputs are the daylit columns --> output fluxes therefore also on daylit columns. 
                errmsg = rte_sw( kdist_sw,     & ! input (from init)
                                 gas_concs_sw, & ! input, (from rrtmgp_set_gases_sw)
@@ -1449,6 +1408,7 @@ subroutine radiation_tend( &
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_sw: '//trim(errmsg))
                end if
+               write(iulog,*) 'Radiation_Tend finished rte_sw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
 
 
                !
@@ -1594,8 +1554,44 @@ subroutine radiation_tend( &
                call clipper(cloud_lw%tau, 0._r8, huge(cloud_lw%tau))
                call clipper(aer_lw%tau,   0._r8, huge(aer_lw%tau))
                
-               ! Compute LW fluxes
 
+               call check_bounds(gas_concs_lw, errmsg)
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds gas_concs_lw: '//trim(errmsg))
+               end if
+               errmsg = cloud_lw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds cloud_lw: '//trim(errmsg))
+               end if
+               errmsg = aer_lw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds aer_lw: '//trim(errmsg))
+               end if
+               call check_bounds(pint_rad, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds pint_rad: '//trim(errmsg))
+               end if
+               call check_bounds(t_rad, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds t_rad: '//trim(errmsg))
+               end if
+               call check_bounds(pmid_rad, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds pint_rad: '//trim(errmsg))
+               end if
+               call check_bounds(t_sfc, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
+               if (len_trim(errmsg) > 0) then
+                  call endrun(sub//': ERROR code returned by check_bounds t_sfc: '//trim(errmsg))
+               end if
+               call check_bounds(emis_sfc, 1.0_r8, 0.0_r8, errmsg)  ! Is this being set correctly????
+               if (len_trim(errmsg) > 0) then
+                  write(iulog,*) 'surface emissivity shape: ',SHAPE(emis_sfc),' min: ',MINVAL(emis_sfc),' max: ',MAXVAL(emis_sfc)
+                  call endrun(sub//': ERROR code returned by check_bounds emis_sfc: '//trim(errmsg))
+               end if
+               ! how to validate kdist_lw
+
+               ! Compute LW fluxes
+               write(iulog,*) 'Radiation_Tend about to start rte_lw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
                errmsg = rte_lw(kdist_lw,         & ! input
                                gas_concs_lw,     & ! input, (rrtmgp_set_gases_lw)
                                pmid_rad,         & ! input, (rrtmgp_set_state)
@@ -1611,6 +1607,7 @@ subroutine radiation_tend( &
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_lw: '//trim(errmsg))
                end if
+               write(iulog,*) 'Radiation_Tend finished rte_lw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
 
                !
                ! -- longwave output --
@@ -1660,6 +1657,9 @@ subroutine radiation_tend( &
 
    end if   ! if (dosw .or. dolw) then
 
+   write(iulog,*) 'Radiation_Tend finished calculation [timestep ',get_nstep(), ', chunk: ',lchnk,'] -- qrs max: ',maxval(qrs),' min: ',minval(qrs),' -- qrl max: ',maxval(qrl), ' min: ',minval(qrl)
+
+
    ! ------------------------------------------------------------------------
    !
    ! After any radiative transfer is done: output & convert fluxes to heating
@@ -1697,6 +1697,8 @@ subroutine radiation_tend( &
       deallocate(rd)
    end if
 
+   write(iulog,*) 'Radiation_Tend END [timestep ',get_nstep(), ', chunk: ',lchnk,']'
+   
 !-------------------------------------------------------------------------------
 contains
 !-------------------------------------------------------------------------------
@@ -1897,8 +1899,9 @@ contains
 
    end subroutine heating_rate
 
-   !-------------------------------------------------------------------------------
-
+   !----------------------------------------------------------------------------
+   !            -- end contains statement of radiation_tend --
+   !----------------------------------------------------------------------------
 end subroutine radiation_tend
 
 !===============================================================================
@@ -2747,7 +2750,7 @@ end subroutine initialize_rrtmgp_fluxes
 
 
 subroutine initialize_rrtmgp_cloud_optics_sw(ncol, nlevels, kdist, optics)
-   use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
+   ! use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp  ! module level
    use mo_optical_props,      only: ty_optical_props_2str
 
    integer, intent(in) :: ncol, nlevels
@@ -2772,7 +2775,7 @@ end subroutine initialize_rrtmgp_cloud_optics_sw
 
 
 subroutine initialize_rrtmgp_cloud_optics_lw(ncol, nlevels, kdist, optics)
-   use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
+   ! use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp  ! module level
    use mo_optical_props,      only: ty_optical_props_1scl
 
    integer, intent(in) :: ncol, nlevels
