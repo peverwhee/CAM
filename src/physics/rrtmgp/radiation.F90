@@ -37,13 +37,22 @@ use cam_history_support, only: fillvalue
 
 use ioFileMod,           only: getfil
 use cam_pio_utils,       only: cam_pio_openfile
-use pio,                 only: file_desc_t, var_desc_t,               &
-                               PIO_NOERR, PIO_INTERNAL_ERROR,         &
-                               pio_seterrorhandling, PIO_BCAST_ERROR, &
-                               pio_inq_dimlen, pio_inq_dimid,         &
-                               pio_inq_varid, pio_def_var,            &
-                               pio_put_var, pio_get_var,              &
-                               PIO_NOWRITE, pio_closefile
+use pio,                 only: file_desc_t,          &  
+                               var_desc_t,           &
+                               pio_int,              &
+                               PIO_NOERR,            &
+                               PIO_INTERNAL_ERROR,   &
+                               pio_seterrorhandling, &
+                               PIO_BCAST_ERROR,      &
+                               pio_inq_dimlen,       &
+                               pio_inq_dimid,        &
+                               pio_inq_varid,        &
+                               pio_def_var,          &
+                               pio_put_var,          &
+                               pio_get_var,          &
+                               pio_put_att,          &
+                               PIO_NOWRITE,          &
+                               pio_closefile
 
 use cam_abortutils,      only: endrun
 use error_messages,      only: handle_err
@@ -68,6 +77,9 @@ public :: &
    radiation_read_restart,   &! read variables from restart
    radiation_tend,           &! compute heating rates and fluxes
    rad_out_t                  ! type for diagnostic outputs
+
+real(r8), public, protected :: nextsw_cday       ! future radiation calday for surface models
+
 
 type rad_out_t
    real(r8) :: solin(pcols)         ! Solar incident flux
@@ -196,6 +208,7 @@ character(len=5), dimension(10) :: active_gases = (/ &
 'CFC11', 'CFC12' /)
 
 
+type(var_desc_t) :: nextsw_cday_desc
 
 !===============================================================================
 contains
@@ -383,6 +396,8 @@ real(r8) function radiation_nextsw_cday()
    integer :: offset     ! offset for calendar day calculation
    integer :: dtime      ! integer timestep size
    real(r8):: calday     ! calendar day of 
+   real(r8):: caldayp1   ! calendar day of next time-step
+
    !-----------------------------------------------------------------------
 
    radiation_nextsw_cday = -1._r8
@@ -401,7 +416,13 @@ real(r8) function radiation_nextsw_cday()
    if(radiation_nextsw_cday == -1._r8) then
       call endrun('error in radiation_nextsw_cday')
    end if
-        
+   
+   ! determine if next radiation time-step not equal to next time-step
+   if (get_nstep() >= 1) then
+      caldayp1 = get_curr_calday(offset=int(dtime))
+      if (caldayp1 /= radiation_nextsw_cday) radiation_nextsw_cday = -1._r8
+   end if    
+
 end function radiation_nextsw_cday
 
 !================================================================================================
@@ -412,13 +433,14 @@ subroutine radiation_init(pbuf2d)
    ! parameterizations.  
    ! Add fields to the history buffer.
 
-   use physics_buffer,  only: pbuf_get_index
+   use physics_buffer,  only: pbuf_get_index, pbuf_set_field
    use phys_control,    only: phys_getopts
    ! use rad_solar_var,   only: rad_solar_var_init  ! This initializes total solar irradiance, RRTMGP should deal with it.
    use radiation_data,  only: rad_data_init
    use cloud_rad_props, only: cloud_rad_props_init
    use modal_aer_opt,   only: modal_aer_opt_init
    use rrtmgp_inputs,   only: rrtmgp_inputs_init
+   use time_manager,    only: is_first_step
 
    ! arguments
    type(physics_buffer_desc), pointer :: pbuf2d(:,:)
@@ -492,11 +514,22 @@ subroutine radiation_init(pbuf2d)
    ngpt_lw = kdist_lw%get_ngpt()
    ngpt_sw = kdist_sw%get_ngpt()
 
+
+   if (is_first_step()) then
+      call pbuf_set_field(pbuf2d, qrl_idx, 0._r8)
+   end if
+
+
    ! Set the radiation timestep for cosz calculations if requested using
    ! the adjusted iradsw value from radiation
    if (use_rad_dt_cosz)  then
       dtime  = get_step_size()
       dt_avg = iradsw*dtime
+   end if
+
+   ! Surface components to get radiation computed today
+   if (.not. is_first_restart_step()) then
+      nextsw_cday = get_curr_calday()
    end if
 
    call phys_getopts(history_amwg_out   = history_amwg,    &
@@ -711,8 +744,14 @@ subroutine radiation_define_restart(file)
    ! arguments
    type(file_desc_t), intent(inout) :: file
 
+   ! local variables
+   integer :: ierr
    !----------------------------------------------------------------------------
 
+   call pio_seterrorhandling(file, PIO_BCAST_ERROR)
+
+   ierr = pio_def_var(file, 'nextsw_cday', pio_int, nextsw_cday_desc)
+   ierr = pio_put_att(file, nextsw_cday_desc, 'long_name', 'future radiation calday for surface models')
 
 end subroutine radiation_define_restart
   
@@ -725,7 +764,10 @@ subroutine radiation_write_restart(file)
    ! arguments
    type(file_desc_t), intent(inout) :: file
 
+   ! local variables
+   integer :: ierr
    !----------------------------------------------------------------------------
+   ierr = pio_put_var(File, nextsw_cday_desc, (/ nextsw_cday /))
 
 end subroutine radiation_write_restart
   
@@ -738,7 +780,15 @@ subroutine radiation_read_restart(file)
    ! arguments
    type(file_desc_t), intent(inout) :: file
 
+   ! local variables
+   integer :: ierr
+   type(var_desc_t) :: vardesc
+
    !----------------------------------------------------------------------------
+
+   ierr = pio_inq_varid(file, 'nextsw_cday', vardesc)
+   ierr = pio_get_var(file, vardesc, nextsw_cday)
+
 
 end subroutine radiation_read_restart
   
@@ -1045,6 +1095,10 @@ subroutine radiation_tend( &
                            primary=TROP_ALG_HYBSTOB,     &
                            backup=TROP_ALG_CLIMATE)
    end if
+
+   ! Get time of next radiation calculation - albedos will need to be
+   ! calculated by each surface model at this time
+   nextsw_cday = radiation_nextsw_cday()
 
 
    ! if Nday = 0, then we should not do shortwave,
