@@ -27,10 +27,11 @@ use rad_constituents,    only: N_DIAG, rad_cnst_get_call_list, &
                                icecldoptics
 
 use radconstants,        only: nswbands, nlwbands, rrtmg_sw_cloudsim_band, rrtmg_lw_cloudsim_band, &
-                               idx_sw_diag, rrtmg_to_rrtmgp_swbands
+                               idx_sw_diag, rrtmg_to_rrtmgp_swbands, gasnamelength, nradgas, gaslist
 
 use mo_gas_concentrations, only: ty_gas_concs
 use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
+
 
 use cam_history,         only: addfld, add_default, horiz_only, outfld, hist_fld_active
 use cam_history_support, only: fillvalue
@@ -202,10 +203,13 @@ integer :: ngpt_sw
 ! gases before these are available via the rad_cnst interface. 
 ! TODO: Move this to namelist or somewhere appropriate.
 ! NOTE: This list is not the same as `gaslist` in radconstants; is that a problem? Implication for diagnostic calls?
-character(len=5), dimension(10) :: active_gases = (/ &
-'H2O  ', 'CO2  ', 'O3   ', 'N2O  ', &
-'CO   ', 'CH4  ', 'O2   ', 'N2   ', &
-'CFC11', 'CFC12' /)
+! character(len=5), dimension(10) :: active_gases = (/ &
+! 'H2O  ', 'CO2  ', 'O3   ', 'N2O  ', &
+! 'CO   ', 'CH4  ', 'O2   ', 'N2   ', &
+! 'CFC11', 'CFC12' /)
+
+! BPM: use radconstants to define the active gases:
+character(len=gasnamelength), dimension(nradgas) :: active_gases = gaslist
 
 
 type(var_desc_t) :: nextsw_cday_desc
@@ -514,11 +518,9 @@ subroutine radiation_init(pbuf2d)
    ngpt_lw = kdist_lw%get_ngpt()
    ngpt_sw = kdist_sw%get_ngpt()
 
-
    if (is_first_step()) then
       call pbuf_set_field(pbuf2d, qrl_idx, 0._r8)
    end if
-
 
    ! Set the radiation timestep for cosz calculations if requested using
    ! the adjusted iradsw value from radiation
@@ -1162,6 +1164,8 @@ subroutine radiation_tend( &
          alb_dif) !,        & ! output
          ! rd%solin        & ! output (TOA flux, but gas optics is also doing it --> SHOULD BE AN OPTION ???)
          ! )
+         ! rrtmgp_set_state might also provide interface temperature and col_dry if we don't want radiation to estimate them.
+
       nlevrad = size(t_rad,2)
    
       ! check bounds for temperature -- These are specified in the coefficients file,
@@ -1639,7 +1643,6 @@ subroutine radiation_tend( &
                end if
                call check_bounds(emis_sfc, 1.0_r8, 0.0_r8, errmsg)  ! Is this being set correctly????
                if (len_trim(errmsg) > 0) then
-                  write(iulog,*) 'surface emissivity shape: ',SHAPE(emis_sfc),' min: ',MINVAL(emis_sfc),' max: ',MAXVAL(emis_sfc)
                   call endrun(sub//': ERROR code returned by check_bounds emis_sfc: '//trim(errmsg))
                end if
                ! how to validate kdist_lw
@@ -1656,7 +1659,7 @@ subroutine radiation_tend( &
                                cloud_lw,         & ! input, (rrtmgp_set_cloud_lw)
                                flw,              & ! output
                                flwc,             & ! output
-                               aer_props=aer_lw  & ! optional input, (rrtmgp_set_aer_lw)  
+                               aer_props=aer_lw  & ! optional input, (rrtmgp_set_aer_lw  
                )
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_lw: '//trim(errmsg))

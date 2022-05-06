@@ -178,10 +178,7 @@ contains
     error_msg = sources%alloc(ncol, nlay)
     if (error_msg /= '') return
 
-    write(iulog,*) '** INSIDE rte_lw --> source function initialized/allocated'
-
-    write(iulog,*) '^^^ rte_lw --> inputs to %gas_optics():',' *TBD* '
-
+    write(iulog,*) '** INSIDE rte_lw --> source function initialized/allocated'    
 
     ! ------------------------------------------------------------------------------------
     ! Clear skies
@@ -189,8 +186,9 @@ contains
     ! Gas optical depth -- pressure need to be expressed as Pa
     !
     error_msg = k_dist%gas_optics(p_lay, p_lev, t_lay, t_sfc, gas_concs, &
-                                  optical_props, sources,                &
-                                  col_dry, t_lev)
+                                  optical_props, sources) !,                &
+                                                          ! col_dry, t_lev)
+                                                          ! col_dry & t_lev are optional, and we have not provided them.
     if (error_msg /= '') then
         return
     end if
@@ -208,7 +206,7 @@ contains
     end if
 
 
-    write(iulog,*) 'rte_lw --> setup done and now to base_rte_lw (clear-sky) '
+    write(iulog,*) '/glade/scratch/brianpm/rrtmgp.f2000climo.ne30pg3.010/run/cesm.log.3546373.chadmin1.ib0.cheyenne.ucar.edu.220328-140957/glade/scratch/brianpm/rrtmgp.f2000climo.ne30pg3.010/run/cesm.log.3546373.chadmin1.ib0.cheyenne.ucar.edu.220328-140957 --> setup done and now to base_rte_lw (clear-sky) '
 
     error_msg = base_rte_lw(optical_props, top_at_1, sources, &
                             sfc_emis, clrsky_fluxes,          &
@@ -344,8 +342,9 @@ contains
     ! Gas optical depth -- pressure need to be expressed as Pa
     !
     error_msg = k_dist%gas_optics(p_lay, p_lev, t_lay, gas_concs,  &
-                                  optical_props, toa_flux,                          &
-                                  col_dry)
+                                  optical_props, toa_flux) ! ,                          &
+                                                           ! col_dry)
+                                                          ! col_dry is optional and we have not provided it.
     if (error_msg /= '') return
     !
     ! If users have supplied an incident flux, use that
