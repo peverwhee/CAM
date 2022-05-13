@@ -14,3 +14,22 @@
 # usermods_dir/scam_mandatory will be included for all single column
 # runs by default.  This usermods directory contains mandatory settings
 # for scam and shouldn't be modified by the user.
+
+./xmlchange ATM_NCPL=192
+
+./xmlchange STOP_N=5952
+
+./xmlchange START_TOD=00000
+
+./xmlchange STOP_OPTION=nsteps
+
+./xmlchange PTS_LAT=-50.
+
+./xmlchange PTS_LON=100.
+
+./xmlchange RUN_STARTDATE=2010-07-01
+
+./xmlchange DOUT_S=false
+
+./xmlchange --append "CAM_CONFIG_OPTS=-phys cam_dev -nlev 58"
+
