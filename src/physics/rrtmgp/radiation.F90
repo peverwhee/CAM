@@ -8,6 +8,7 @@ module radiation
 
 use shr_kind_mod,        only: r8=>shr_kind_r8, cl=>shr_kind_cl
 use spmd_utils,          only: masterproc
+use shr_mem_mod,         only: shr_mem_getusage
 use ppgrid,              only: pcols, pver, pverp, begchunk, endchunk
 use ref_pres,            only: pref_edge
 use physics_types,       only: physics_state, physics_ptend
@@ -27,11 +28,10 @@ use rad_constituents,    only: N_DIAG, rad_cnst_get_call_list, &
                                icecldoptics
 
 use radconstants,        only: nswbands, nlwbands, rrtmg_sw_cloudsim_band, rrtmg_lw_cloudsim_band, &
-                               idx_sw_diag, rrtmg_to_rrtmgp_swbands, gasnamelength, nradgas, gaslist
+                               idx_sw_diag, rrtmg_to_rrtmgp_swbands
 
 use mo_gas_concentrations, only: ty_gas_concs
 use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
-
 
 use cam_history,         only: addfld, add_default, horiz_only, outfld, hist_fld_active
 use cam_history_support, only: fillvalue
@@ -203,13 +203,10 @@ integer :: ngpt_sw
 ! gases before these are available via the rad_cnst interface. 
 ! TODO: Move this to namelist or somewhere appropriate.
 ! NOTE: This list is not the same as `gaslist` in radconstants; is that a problem? Implication for diagnostic calls?
-! character(len=5), dimension(10) :: active_gases = (/ &
-! 'H2O  ', 'CO2  ', 'O3   ', 'N2O  ', &
-! 'CO   ', 'CH4  ', 'O2   ', 'N2   ', &
-! 'CFC11', 'CFC12' /)
-
-! BPM: use radconstants to define the active gases:
-character(len=gasnamelength), dimension(nradgas) :: active_gases = gaslist
+character(len=5), dimension(10) :: active_gases = (/ &
+'H2O  ', 'CO2  ', 'O3   ', 'N2O  ', &
+'CO   ', 'CH4  ', 'O2   ', 'N2   ', &
+'CFC11', 'CFC12' /)
 
 
 type(var_desc_t) :: nextsw_cday_desc
@@ -518,9 +515,11 @@ subroutine radiation_init(pbuf2d)
    ngpt_lw = kdist_lw%get_ngpt()
    ngpt_sw = kdist_sw%get_ngpt()
 
+
    if (is_first_step()) then
       call pbuf_set_field(pbuf2d, qrl_idx, 0._r8)
    end if
+
 
    ! Set the radiation timestep for cosz calculations if requested using
    ! the adjusted iradsw value from radiation
@@ -997,6 +996,7 @@ subroutine radiation_tend( &
 
    integer :: iband
    integer :: nlevcam, nlevrad
+   real(r8) :: mem_hw_end, mem_hw_beg, mem_end, mem_beg, temp
 
    !--------------------------------------------------------------------------------------
 
@@ -1164,8 +1164,6 @@ subroutine radiation_tend( &
          alb_dif) !,        & ! output
          ! rd%solin        & ! output (TOA flux, but gas optics is also doing it --> SHOULD BE AN OPTION ???)
          ! )
-         ! rrtmgp_set_state might also provide interface temperature and col_dry if we don't want radiation to estimate them.
-
       nlevrad = size(t_rad,2)
    
       ! check bounds for temperature -- These are specified in the coefficients file,
@@ -1447,6 +1445,7 @@ subroutine radiation_tend( &
                end if
                ! call check_bounds(kdist_sw, errmsg)
                write(iulog,*) 'Radiation_Tend about to start rte_sw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
+               call shr_mem_getusage(mem_hw_beg, mem_beg)
                ! inputs are the daylit columns --> output fluxes therefore also on daylit columns. 
                errmsg = rte_sw( kdist_sw,     & ! input (from init)
                                 gas_concs_sw, & ! input, (from rrtmgp_set_gases_sw)
@@ -1461,7 +1460,17 @@ subroutine radiation_tend( &
                                 fswc,     & ! inout 
                                 aer_props=aer_sw) !,                   & ! optional input (from rrtmgp_set_aer_sw)
                !                                    !tsi_scaling=eccf)   ! optional input
-
+               call shr_mem_getusage(mem_hw_end, mem_end)
+               temp = mem_hw_end - mem_hw_beg
+               if (masterproc) then
+                  write(iulog, *) 'rte_sw: Increase in memory highwater = ',    &
+                      temp, ' (MB)'
+               end if
+               temp = mem_end - mem_beg
+               if (masterproc) then
+                  write(iulog, *) 'rte_sw: Increase in memory usage = ',    &
+                      temp, ' (MB)'
+               end if
 
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_sw: '//trim(errmsg))
@@ -1643,6 +1652,7 @@ subroutine radiation_tend( &
                end if
                call check_bounds(emis_sfc, 1.0_r8, 0.0_r8, errmsg)  ! Is this being set correctly????
                if (len_trim(errmsg) > 0) then
+                  write(iulog,*) 'surface emissivity shape: ',SHAPE(emis_sfc),' min: ',MINVAL(emis_sfc),' max: ',MAXVAL(emis_sfc)
                   call endrun(sub//': ERROR code returned by check_bounds emis_sfc: '//trim(errmsg))
                end if
                ! how to validate kdist_lw
@@ -1659,7 +1669,7 @@ subroutine radiation_tend( &
                                cloud_lw,         & ! input, (rrtmgp_set_cloud_lw)
                                flw,              & ! output
                                flwc,             & ! output
-                               aer_props=aer_lw  & ! optional input, (rrtmgp_set_aer_lw  
+                               aer_props=aer_lw  & ! optional input, (rrtmgp_set_aer_lw)  
                )
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_lw: '//trim(errmsg))
