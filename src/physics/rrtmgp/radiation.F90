@@ -28,7 +28,7 @@ use rad_constituents,    only: N_DIAG, rad_cnst_get_call_list, &
                                icecldoptics
 
 use radconstants,        only: nswbands, nlwbands, rrtmg_sw_cloudsim_band, rrtmg_lw_cloudsim_band, &
-                               idx_sw_diag, rrtmg_to_rrtmgp_swbands
+                               idx_sw_diag, rrtmg_to_rrtmgp_swbands, gasnamelength, nradgas, gaslist
 
 use mo_gas_concentrations, only: ty_gas_concs
 use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
@@ -203,10 +203,12 @@ integer :: ngpt_sw
 ! gases before these are available via the rad_cnst interface. 
 ! TODO: Move this to namelist or somewhere appropriate.
 ! NOTE: This list is not the same as `gaslist` in radconstants; is that a problem? Implication for diagnostic calls?
-character(len=5), dimension(10) :: active_gases = (/ &
-'H2O  ', 'CO2  ', 'O3   ', 'N2O  ', &
-'CO   ', 'CH4  ', 'O2   ', 'N2   ', &
-'CFC11', 'CFC12' /)
+! character(len=5), dimension(10) :: active_gases = (/ &
+! 'H2O  ', 'CO2  ', 'O3   ', 'N2O  ', &
+! 'CO   ', 'CH4  ', 'O2   ', 'N2   ', &
+! 'CFC11', 'CFC12' /)
+! BPM: use radconstants to define the active gases:
+character(len=gasnamelength), dimension(nradgas) :: active_gases = gaslist
 
 
 type(var_desc_t) :: nextsw_cday_desc
@@ -1493,11 +1495,6 @@ subroutine radiation_tend( &
             end if ! (active_calls(icall))
          end do    ! loop over diagnostic calcs (icall)
          
-         call free_optics_sw(cloud_sw)
-         call free_optics_sw(aer_sw)
-         call free_fluxes(fsw)
-         call free_fluxes(fswc)
-
       else
          if (conserve_energy) then
             qrs(1:ncol,1:pver) = qrs(1:ncol,1:pver) / state%pdel(1:ncol,1:pver)
@@ -1689,11 +1686,6 @@ subroutine radiation_tend( &
             end if
          end do
 
-         call free_optics_lw(cloud_lw)
-         call free_optics_lw(aer_lw)
-         call free_fluxes(flw)
-         call free_fluxes(flwc)
-
       else
          if (conserve_energy) then
             qrl(1:ncol,1:pver) = qrl(1:ncol,1:pver) / state%pdel(1:ncol,1:pver)
@@ -1763,6 +1755,15 @@ subroutine radiation_tend( &
    if (.not. present(rd_out)) then
       deallocate(rd)
    end if
+   call free_optics_sw(cloud_sw)
+   call free_optics_sw(aer_sw)
+   call free_fluxes(fsw)
+   call free_fluxes(fswc)
+
+   call free_optics_lw(cloud_lw)
+   call free_optics_lw(aer_lw)
+   call free_fluxes(flw)
+   call free_fluxes(flwc)
 
    write(iulog,*) 'Radiation_Tend END [timestep ',get_nstep(), ', chunk: ',lchnk,']'
    

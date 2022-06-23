@@ -205,9 +205,6 @@ contains
         return
     end if
 
-
-    write(iulog,*) '/glade/scratch/brianpm/rrtmgp.f2000climo.ne30pg3.010/run/cesm.log.3546373.chadmin1.ib0.cheyenne.ucar.edu.220328-140957/glade/scratch/brianpm/rrtmgp.f2000climo.ne30pg3.010/run/cesm.log.3546373.chadmin1.ib0.cheyenne.ucar.edu.220328-140957 --> setup done and now to base_rte_lw (clear-sky) '
-
     error_msg = base_rte_lw(optical_props, top_at_1, sources, &
                             sfc_emis, clrsky_fluxes,          &
                             inc_flux, n_gauss_angles)
