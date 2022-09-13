@@ -21,9 +21,10 @@ use physics_types,    only: physics_state
 use physics_buffer,   only: physics_buffer_desc
 use camsrfexch,       only: cam_in_t
 
-! use radconstants,     only: get_ref_solar_band_irrad, rad_gas_index  ! Not needed anymore (?)
-use radconstants,     only: nradgas, gaslist
+use radconstants,     only: get_ref_solar_band_irrad, rad_gas_index
+use radconstants,     only: nradgas, gaslist, rrtmg_to_rrtmgp_swbands
 use rad_solar_var,    only: get_variability
+use solar_irrad_data, only : do_spctrl_scaling
 use rad_constituents, only: rad_cnst_get_gas
 
 use mcica_subcol_gen, only: mcica_subcol_sw, mcica_subcol_lw
@@ -31,6 +32,7 @@ use mcica_subcol_gen, only: mcica_subcol_sw, mcica_subcol_lw
 use mo_gas_concentrations, only: ty_gas_concs
 use mo_gas_optics_rrtmgp, only: ty_gas_optics_rrtmgp 
 use mo_optical_props, only: ty_optical_props, ty_optical_props_2str, ty_optical_props_1scl
+
 ! unneeded use mo_rrtmgp_util_string, only: lower_case 
 use cam_logfile,         only: iulog
 use cam_abortutils,   only: endrun
@@ -93,12 +95,11 @@ end subroutine rrtmgp_inputs_init
 subroutine rrtmgp_set_state( &
    pstate, cam_in, ncol, nlay, nlwbands, &
    nswbands, ngpt_sw, nday, idxday, coszrs, &
-   kdist_sw, eccf, t_sfc, emis_sfc, t_rad, &
+   kdist_sw, &   ! eccf, & !!! Removing eccf from arguments, as it is not needed here
+   band2gpt_sw,    &
+   t_sfc, emis_sfc, t_rad, &
    pmid_rad, pint_rad, t_day, pmid_day, pint_day, &
-   coszrs_day, alb_dir, alb_dif) 
-   ! solin was the last (output) parameter originally (bpm) , when we remove it, don't need radconstants anymore
-   ! NOTE: We should allow solin to be specified either using old way (like commented here) or with RRTMGP
-   !       - add a namelist parameter.
+   coszrs_day, alb_dir, alb_dif, tsi, tsi_scaling_gpt) 
 
    ! arguments
    type(physics_state), target, intent(in) :: pstate
@@ -111,10 +112,11 @@ subroutine rrtmgp_set_state( &
    integer,                     intent(in) :: nday
    integer,                     intent(in) :: idxday(:)
    real(r8),                    intent(in) :: coszrs(:)
-   real(r8),                    intent(in) :: eccf       ! Earth orbit eccentricity factor
+   ! real(r8),                    intent(in) :: eccf       ! Earth orbit eccentricity factor
+   integer,                     intent(in) :: band2gpt_sw(:,:) !< (2, nswbands)
 
-   class(ty_gas_optics_rrtmgp), intent(in) :: kdist_sw  ! spectral information, but is not used here.
-
+   class(ty_gas_optics_rrtmgp), intent(in) :: kdist_sw  ! spectral information
+!!! CHECK pcols vs ncol !!!
    real(r8), intent(out) :: t_sfc(ncol)              ! surface temperature [K] 
    real(r8), intent(out) :: emis_sfc(nlwbands,ncol)  ! emissivity at surface []
    real(r8), intent(out) :: t_rad(ncol,nlay)         ! layer midpoint temperatures [K]
@@ -123,21 +125,25 @@ subroutine rrtmgp_set_state( &
    real(r8), intent(out) :: t_day(nday,nlay)         ! layer midpoint temperatures [K]
    real(r8), intent(out) :: pmid_day(nday,nlay)      ! layer midpoint pressure [Pa]
    real(r8), intent(out) :: pint_day(nday,nlay+1)    ! layer interface pressures [Pa]
-   real(r8), intent(out) :: coszrs_day(nday)         ! cosize of solar zenith angle
+   real(r8), intent(out) :: coszrs_day(nday)         ! cosine of solar zenith angle
    real(r8), intent(out) :: alb_dir(nswbands,nday)   ! surface albedo, direct radiation
    real(r8), intent(out) :: alb_dif(nswbands,nday)   ! surface albedo, diffuse radiation
-   ! real(r8), intent(out) :: solin(pcols)             ! incident flux at domain top [W/m2] ! REMOVED -- LET RADIATION FIGURE IT OUT
+   ! real(r8), intent(out) :: solin(ncol)             ! incident flux at domain top [W/m2]
+   ! real(r8), intent(out) :: solar_irrad_gpt(nday,ngpt_sw)  ! incident flux at domain top per gpoint [W/m2] AT DAYLIT POINTS
+   real(r8), intent(out) :: tsi_scaling_gpt(ngpt_sw)  ! scale factor for irradiance by gpoint [fraction]
+   real(r8), intent(out) :: tsi ! total irradiance W/m2
 
    ! local variables
    integer :: k, kk, i, iband
 
-   real(r8) :: solar_band_irrad(nswbands) ! rrtmg-assumed solar irradiance in each sw band
+   real(r8) :: solar_band_irrad(nswbands) ! specified solar irradiance in each sw band (per radconstants)
 
-   ! real(r8) :: sfac(nswbands)             ! time varying scaling factors due to Solar Spectral  / REMOVED
-   !                                        ! Irrad at 1 A.U. per band
-   real(r8) :: bnd_irrad
-   real(r8) :: solin_day(nday)
+   real(r8) :: sfac(nswbands)             ! time varying scaling factors due to Solar Spectral
+                                          ! Irrad at 1 A.U. per band
    real(r8) :: wavenumber_limits(2,nswbands)
+
+   ! real(r8) :: toa_flx_by_band(nswbands) ! temporary array of incoming flux by band
+   ! real(r8) :: toa_flx_by_gpt(ngpt_sw) ! temporary array of incoming flux by gpt
 
    character(len=*), parameter :: sub='rrtmgp_set_state'
    character(len=512) :: errmsg
@@ -206,26 +212,21 @@ subroutine rrtmgp_set_state( &
       coszrs_day(i) = coszrs(idxday(i))
    end do
  
-   ! <-- bpm -- let radiation deal with SOLIN & variability -->
-   ! <-- But keep this code. We should provide an option to use this method. -->
+
    ! Define solar incident radiation
-   ! (bpm) This is done within radiation, so we should remove this block, and not output solin.
-   ! call get_ref_solar_band_irrad(solar_band_irrad)
-   ! call get_variability(sfac)
+   call get_ref_solar_band_irrad(solar_band_irrad)
+   call get_variability(sfac)
+   solar_band_irrad = solar_band_irrad(rrtmg_to_rrtmgp_swbands)
+   tsi = sum(solar_band_irrad(:)) ! total TSI integrated across bands, BUT NOT scaled for variability
+   ! convert from irradiance scale factor per band (sfac) to per gpoint
+   ! --> this can then be used in rrtmgp_driver module, rte_sw to scale TOA flux
+   tsi_scaling_gpt = 0.0
 
-   ! solin_day = 0._r8
-   ! do i = 1, nday
-   !    do iband = 1, nswbands
-   !       bnd_irrad = sfac(iband) * solar_band_irrad(iband) * eccf * coszrs_day(i)
-   !       solin_day(i) = solin_day(i) + bnd_irrad
-   !    end do
-   ! end do
+   do iband = 1,nswbands
+      tsi_scaling_gpt(band2gpt_sw(1,iband):band2gpt_sw(2,iband)) = sfac(iband)
+   end do
 
-   ! solin = 0._r8
-   ! do i = 1, nday
-   !    solin(idxday(i)) = solin_day(i)
-   ! end do
-   !<-- end remove -->
+   ! if we had a method to produce toa flux by gpoint, we could make that an output here.
 
    ! <-- begin: old way of setting albedo hard-wired to 14 SW bands -->
    ! ! Surface albedo (band mapping is hardcoded for RRTMG(P) code)
@@ -805,5 +806,26 @@ subroutine rrtmgp_set_aer_sw( &
 end subroutine rrtmgp_set_aer_sw
 
 !==================================================================================================
+
+subroutine expand_and_transpose(ops,arr_in,arr_out)
+   ! based on version in mo_rte_sw
+   class(ty_gas_optics_rrtmgp), intent(in) :: ops  ! spectral information
+   real(r8), dimension(:), intent(in ) :: arr_in  ! (nband)
+   real(r8), dimension(:), intent(out) :: arr_out ! (igpt)
+   ! -------------
+   integer :: nband, ngpt
+   integer :: iband, igpt
+   integer, dimension(2,ops%get_nband()) :: limits
+
+   nband = ops%get_nband()
+   ngpt  = ops%get_ngpt()
+   limits = ops%get_band_lims_gpoint()
+   do iband = 1, nband
+      do igpt = limits(1, iband), limits(2, iband)
+         arr_out(igpt) = arr_in(iband)
+      end do
+   end do
+
+ end subroutine expand_and_transpose
 
 end module rrtmgp_inputs

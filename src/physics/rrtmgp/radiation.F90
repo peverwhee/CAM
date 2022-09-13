@@ -197,6 +197,10 @@ integer :: ngpt_lw
 type(ty_gas_optics_rrtmgp) :: kdist_sw ! bpm changed here
 integer :: ngpt_sw
 
+! data to go from bands to gpoints (bpm)
+integer, allocatable :: band2gpt_sw(:,:) ! n[s,l]wbands come from radconstants for now
+integer, allocatable :: band2gpt_lw(:,:)
+
 
 ! Gases to use in the radiative calculations. 
 ! RRTMGP kdist initialization needs to know the names of the
@@ -438,7 +442,7 @@ subroutine radiation_init(pbuf2d)
 
    use physics_buffer,  only: pbuf_get_index, pbuf_set_field
    use phys_control,    only: phys_getopts
-   ! use rad_solar_var,   only: rad_solar_var_init  ! This initializes total solar irradiance, RRTMGP should deal with it.
+   use rad_solar_var,   only: rad_solar_var_init  ! This initializes total solar irradiance
    use radiation_data,  only: rad_data_init
    use cloud_rad_props, only: cloud_rad_props_init
    use modal_aer_opt,   only: modal_aer_opt_init
@@ -506,15 +510,15 @@ subroutine radiation_init(pbuf2d)
    call set_available_gases(active_gases, available_gases) ! gases needed to initialize spectral info
 
    ! initialize relevant data
-   ! call rad_solar_var_init() ! Not needed w/ RRTMGP
+   call rad_solar_var_init() ! sets the total solar irradiance (I wonder whether this should use kdist information instead of radconstants; alternative use kdist%set_tsi to ensure consistency?)
    call rrtmgp_inputs_init(ktopcamm, ktopradm, ktopcami, ktopradi) ! this sets these values as module data in rrtmgp_inputs
 
-   call coefs_init(coefs_lw_file, kdist_lw, available_gases)
-   call coefs_init(coefs_sw_file, kdist_sw, available_gases)
+   call coefs_init(coefs_lw_file, kdist_lw, available_gases, band2gpt_lw)
+   call coefs_init(coefs_sw_file, kdist_sw, available_gases, band2gpt_sw) ! bpm : these now provide band2gpt which should be global
    call rad_data_init(pbuf2d)  ! initialize output fields for offline driver
    call cloud_rad_props_init()
   
-   ngpt_lw = kdist_lw%get_ngpt()
+   ngpt_lw = kdist_lw%get_ngpt() ! these set global values
    ngpt_sw = kdist_sw%get_ngpt()
 
 
@@ -910,6 +914,8 @@ subroutine radiation_tend( &
    real(r8), allocatable :: coszrs_day(:)
    real(r8), allocatable :: alb_dir(:,:)
    real(r8), allocatable :: alb_dif(:,:)
+   real(r8), allocatable :: tsi_scaling_gpt(:)
+
 
    ! cloud radiative parameters are "in cloud" not "in cell"
    real(r8) :: ice_tau    (nswbands,pcols,pver) ! ice extinction optical depth
@@ -966,6 +972,7 @@ subroutine radiation_tend( &
    type(ty_optical_props_1scl) :: cloud_lw
    type(ty_optical_props_2str) :: cloud_sw
 
+   ! Irradiance
    integer :: icall                 ! index through climate/diagnostic radiation calls
    logical :: active_calls(0:N_DIAG)
 
@@ -998,7 +1005,10 @@ subroutine radiation_tend( &
 
    integer :: iband
    integer :: nlevcam, nlevrad
+   real(r8) :: tsi 
    real(r8) :: mem_hw_end, mem_hw_beg, mem_end, mem_beg, temp
+   real(r8) :: infinity       ! bpm: use this to check for inf in fluxes
+   infinity = HUGE(infinity)  ! bpm: make it as big as possible
 
    !--------------------------------------------------------------------------------------
 
@@ -1137,7 +1147,9 @@ subroutine radiation_tend( &
          pint_day(nday,nlay+1),   &
          coszrs_day(nday),        &
          alb_dir(nswbands,nday),  &
-         alb_dif(nswbands,nday)   )
+         alb_dif(nswbands,nday),  &
+         tsi_scaling_gpt(ngpt_sw) &
+      )
 
 
       call rrtmgp_set_state( & ! Prepares state variables, daylit columns, albedos for RRTMGP
@@ -1147,12 +1159,12 @@ subroutine radiation_tend( &
          nlay,           & ! input
          nlwbands,       & ! input
          nswbands,       & ! input
-         ngpt_sw,        & ! input (unused)
+         ngpt_sw,        & ! input
          nday,           & ! input
          idxday,         & ! input, [would prefer to truncate as 1:ncol]
          coszrs,         & ! input
-         kdist_sw,       & ! input (from init)
-         eccf,           & ! input
+         kdist_sw,       & ! input (from init)  ! removed: eccf,           & ! input
+         band2gpt_sw,    & ! input (from init), gpoints by band
          t_sfc,          & ! output
          emis_sfc,       & ! output
          t_rad,          & ! output
@@ -1163,11 +1175,19 @@ subroutine radiation_tend( &
          pint_day,       & ! output
          coszrs_day,     & ! output
          alb_dir,        & ! output
-         alb_dif) !,        & ! output
-         ! rd%solin        & ! output (TOA flux, but gas optics is also doing it --> SHOULD BE AN OPTION ???)
-         ! )
+         alb_dif,        & ! output
+         tsi,            & ! output, total solar irradiance (not scaled)
+         tsi_scaling_gpt  & ! output, solar irradiance by gpoint
+         )
       nlevrad = size(t_rad,2)
-   
+
+      !!--> set TSI based on radconstants
+      !!--> use scaling based on eccf & solar variability (file)
+      errmsg = kdist_sw%set_tsi(tsi) ! scales the TSI but does not change spectral distribution
+      if (len_trim(errmsg) > 0) then
+         call endrun(sub//': ERROR: kdist_sw%set_tsi: '//trim(errmsg))
+      end if
+
       ! check bounds for temperature -- These are specified in the coefficients file,
       ! and RRTMGP will not operate if outside the specified range.
       call clipper(t_day, kdist_lw%get_temp_min(), kdist_lw%get_temp_max())
@@ -1276,10 +1296,10 @@ subroutine radiation_tend( &
          ! Mapping from old RRTMG sw bands to new band ordering in RRTMGP
          ! 1. This should be automated to provide generalization to arbitrary spectral grid.
          ! 2. This is used for setting cloud and aerosol optical properties, so probably should be put into a different module.   
-         c_cld_tau     = c_cld_tau    (rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
-         c_cld_tau_w   = c_cld_tau_w  (rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
-         c_cld_tau_w_g = c_cld_tau_w_g(rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
-         c_cld_tau_w_f = c_cld_tau_w_f(rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
+         c_cld_tau(:,1:ncol,1:pver)     = c_cld_tau    (rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
+         c_cld_tau_w(:,1:ncol,1:pver)   = c_cld_tau_w  (rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
+         c_cld_tau_w_g(:,1:ncol,1:pver) = c_cld_tau_w_g(rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
+         c_cld_tau_w_f(:,1:ncol,1:pver) = c_cld_tau_w_f(rrtmg_to_rrtmgp_swbands, 1:ncol, 1:pver)
 
          ! cloud_sw : cloud optical properties.
          call initialize_rrtmgp_cloud_optics_sw(nday, nlay, kdist_sw, cloud_sw)
@@ -1406,38 +1426,40 @@ subroutine radiation_tend( &
                call clipper(cloud_sw%g,  -1._r8, 1._r8)
 
                ! CHECK BOUNDS OF ARRAYS:
-               errmsg = cloud_sw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds cloud_sw: '//trim(errmsg))
-               end if
-               errmsg = aer_sw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds aer_sw: '//trim(errmsg))
-               end if
-               call check_bounds(alb_dir, 1.0_r8, 0.0_r8, errmsg)
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds alb_dir: '//trim(errmsg))
-               end if
-               call check_bounds(alb_dif, 1.0_r8, 0.0_r8, errmsg)
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds alb_dif: '//trim(errmsg))
-               end if
-               call check_bounds(coszrs_day, 1.0_r8, 0.0_r8, errmsg)
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds coszrs_day: '//trim(errmsg))
-               end if
-               call check_bounds(pint_day, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds pint_day: '//trim(errmsg))
-               end if
-               call check_bounds(t_day, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds t_day: '//trim(errmsg))
-               end if
-               call check_bounds(pmid_day, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds pint_day: '//trim(errmsg))
-               end if
+               ! errmsg = cloud_sw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds cloud_sw: '//trim(errmsg))
+               ! end if
+               ! errmsg = aer_sw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds aer_sw: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(alb_dir, 1.0_r8, 0.0_r8, errmsg)
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds alb_dir: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(alb_dif, 1.0_r8, 0.0_r8, errmsg)
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds alb_dif: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(coszrs_day, 1.0_r8, 0.0_r8, errmsg)
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds coszrs_day: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(pint_day, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds pint_day: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(t_day, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds t_day: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(pmid_day, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds pint_day: '//trim(errmsg))
+               ! end if
+
+
                ! Still to validate:
                ! - kdist_sw
                ! - gas_concs_sw
@@ -1446,7 +1468,6 @@ subroutine radiation_tend( &
                   call endrun(sub//': ERROR code returned by check_bounds gas_concs_sw: '//trim(errmsg))
                end if
                ! call check_bounds(kdist_sw, errmsg)
-               write(iulog,*) 'Radiation_Tend about to start rte_sw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
                call shr_mem_getusage(mem_hw_beg, mem_beg)
                ! inputs are the daylit columns --> output fluxes therefore also on daylit columns. 
                errmsg = rte_sw( kdist_sw,     & ! input (from init)
@@ -1460,8 +1481,10 @@ subroutine radiation_tend( &
                                 cloud_sw,     & ! input, (from rrtmgp_set_cloud_sw)
                                 fsw,      & ! inout
                                 fswc,     & ! inout 
-                                aer_props=aer_sw) !,                   & ! optional input (from rrtmgp_set_aer_sw)
-               !                                    !tsi_scaling=eccf)   ! optional input
+                                aer_props=aer_sw, & ! optional input (from rrtmgp_set_aer_sw)
+                                tsi_scaling_gpt=tsi_scaling_gpt*eccf & !< optional input, scaling for irradiance
+               )
+                              !   tsi_scaling=eccf)  ! optional input, scaling
                call shr_mem_getusage(mem_hw_end, mem_end)
                temp = mem_hw_end - mem_hw_beg
                if (masterproc) then
@@ -1473,6 +1496,32 @@ subroutine radiation_tend( &
                   write(iulog, *) 'rte_sw: Increase in memory usage = ',    &
                       temp, ' (MB)'
                end if
+               ! bpm: check if there are inf in fluxes:
+               if (ANY(fsw%bnd_flux_up > infinity)) then
+                  write(iulog,*) 'WARNING: INF DETECTED IN fsw%bnd_flux_up at timestep ',get_nstep()
+               end if
+               if (ANY(fsw%bnd_flux_dn > infinity)) then
+                  write(iulog,*) 'WARNING: INF DETECTED IN fsw%bnd_flux_dn at timestep ',get_nstep()
+               end if
+               if (ANY(fsw%bnd_flux_net > infinity)) then
+                  write(iulog,*) 'WARNING: INF DETECTED IN fsw%bnd_flux_net at timestep ',get_nstep()
+               end if
+               if (ANY(fsw%bnd_flux_dn_dir > infinity)) then
+                  write(iulog,*) 'WARNING: INF DETECTED IN fsw%bnd_flux_dn_dir at timestep ',get_nstep()
+               end if
+               if (ANY(fswc%bnd_flux_up > infinity)) then
+                  write(iulog,*) 'WARNING: INF DETECTED IN fswc%bnd_flux_up at timestep ',get_nstep()
+               end if
+               if (ANY(fswc%bnd_flux_dn > infinity)) then
+                  write(iulog,*) 'WARNING: INF DETECTED IN fswc%bnd_flux_dn at timestep ',get_nstep()
+               end if
+               if (ANY(fswc%bnd_flux_net > infinity)) then
+                  write(iulog,*) 'WARNING: INF DETECTED IN fswc%bnd_flux_net at timestep ',get_nstep()
+               end if
+               if (ANY(fswc%bnd_flux_dn_dir > infinity)) then
+                  write(iulog,*) 'WARNING: INF DETECTED IN fswc%bnd_flux_dn_dir at timestep ',get_nstep()
+               end if
+
 
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_sw: '//trim(errmsg))
@@ -1619,39 +1668,39 @@ subroutine radiation_tend( &
                call clipper(aer_lw%tau,   0._r8, huge(aer_lw%tau))
                
 
-               call check_bounds(gas_concs_lw, errmsg)
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds gas_concs_lw: '//trim(errmsg))
-               end if
-               errmsg = cloud_lw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds cloud_lw: '//trim(errmsg))
-               end if
-               errmsg = aer_lw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds aer_lw: '//trim(errmsg))
-               end if
-               call check_bounds(pint_rad, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds pint_rad: '//trim(errmsg))
-               end if
-               call check_bounds(t_rad, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds t_rad: '//trim(errmsg))
-               end if
-               call check_bounds(pmid_rad, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds pint_rad: '//trim(errmsg))
-               end if
-               call check_bounds(t_sfc, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds t_sfc: '//trim(errmsg))
-               end if
-               call check_bounds(emis_sfc, 1.0_r8, 0.0_r8, errmsg)  ! Is this being set correctly????
-               if (len_trim(errmsg) > 0) then
-                  write(iulog,*) 'surface emissivity shape: ',SHAPE(emis_sfc),' min: ',MINVAL(emis_sfc),' max: ',MAXVAL(emis_sfc)
-                  call endrun(sub//': ERROR code returned by check_bounds emis_sfc: '//trim(errmsg))
-               end if
+               ! call check_bounds(gas_concs_lw, errmsg)
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds gas_concs_lw: '//trim(errmsg))
+               ! end if
+               ! errmsg = cloud_lw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds cloud_lw: '//trim(errmsg))
+               ! end if
+               ! errmsg = aer_lw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds aer_lw: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(pint_rad, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds pint_rad: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(t_rad, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds t_rad: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(pmid_rad, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds pint_rad: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(t_sfc, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds t_sfc: '//trim(errmsg))
+               ! end if
+               ! call check_bounds(emis_sfc, 1.0_r8, 0.0_r8, errmsg)  ! Is this being set correctly????
+               ! if (len_trim(errmsg) > 0) then
+               !    write(iulog,*) 'surface emissivity shape: ',SHAPE(emis_sfc),' min: ',MINVAL(emis_sfc),' max: ',MAXVAL(emis_sfc)
+               !    call endrun(sub//': ERROR code returned by check_bounds emis_sfc: '//trim(errmsg))
+               ! end if
                ! how to validate kdist_lw
 
                ! Compute LW fluxes
@@ -1667,7 +1716,7 @@ subroutine radiation_tend( &
                                flw,              & ! output
                                flwc,             & ! output
                                aer_props=aer_lw  & ! optional input, (rrtmgp_set_aer_lw)  
-               )
+               ) ! note inc_flux is an optional input, but as defined in set_rrtmgp_state, it is only for shortwave
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_lw: '//trim(errmsg))
                end if
@@ -1791,6 +1840,7 @@ contains
       rd%fsntoa          = 0._r8 ! net sw at TOA
       rd%fsntoac         = 0._r8 ! net sw clearsky flux at TOA
       rd%solin           = 0._r8 ! solar irradiance at TOA
+      
       ! fns, fcns, rd are on CAM grid (do not have "extra layer" when it is present.)
       ! fill in the daylit columns:
       do i = 1, nday
@@ -1817,7 +1867,7 @@ contains
 
       fsns(:ncol)        = fns(:ncol,pverp)  ! net sw flux at surface
       fsnt(:ncol)        = fns(:ncol,1)      ! net sw flux at top-of-model (w/o extra layer)
-      rd%flux_sw_net_top = fns(:ncol, 1)   
+      rd%flux_sw_net_top(:ncol) = fns(:ncol, 1)   
       rd%fsnsc(:ncol)    = fcns(:ncol,pverp) ! net sw clearsky flux at surface
       rd%fsntc(:ncol)    = fcns(:ncol,1)     ! net sw clearsky flux at top
 
@@ -2152,7 +2202,7 @@ end subroutine calc_col_mean
 
 !===============================================================================
 
-subroutine coefs_init(coefs_file, kdist, available_gases)
+subroutine coefs_init(coefs_file, kdist, available_gases, band2gpt)
 
    ! Read data from coefficients file.  Initialize the kdist object.
 
@@ -2184,7 +2234,7 @@ subroutine coefs_init(coefs_file, kdist, available_gases)
 
    character(32), dimension(:),  allocatable :: gas_names
    integer,  dimension(:,:,:),   allocatable :: key_species
-   integer,  dimension(:,:),     allocatable :: band2gpt  ! -> file : 'bnd_limits_gpt'
+   integer,  dimension(:,:),     allocatable, intent(out) :: band2gpt  ! -> file : 'bnd_limits_gpt'
    real(r8), dimension(:,:),     allocatable :: band_lims_wavenum ! -> file : 'bnd_limits_wavenumber'
    real(r8), dimension(:),       allocatable :: press_ref, temp_ref
    real(r8)                                  :: press_ref_trop, temp_ref_t, temp_ref_p
@@ -2705,7 +2755,7 @@ subroutine coefs_init(coefs_file, kdist, available_gases)
 
    deallocate( &
       gas_names, key_species,               &
-      band2gpt, band_lims_wavenum,          &
+      band_lims_wavenum,          &
       press_ref, temp_ref, vmr_ref,         &
       kmajor, kminor_lower, kminor_upper,   &
       gas_minor, identifier_minor,          &
@@ -2718,6 +2768,7 @@ subroutine coefs_init(coefs_file, kdist, available_gases)
       scale_by_complement_lower,            & 
       scale_by_complement_upper,            &
       kminor_start_lower, kminor_start_upper)
+   ! did not deallocate band2gpt because we want to use it later (changed it to intent(out), bpm)
    if (allocated(optimal_angle_fit)) deallocate(optimal_angle_fit)
    if (allocated(totplnk))     deallocate(totplnk)
    if (allocated(planck_frac)) deallocate(planck_frac)

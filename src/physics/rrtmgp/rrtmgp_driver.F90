@@ -63,7 +63,7 @@ contains
     real(wp), dimension(:),            intent(in   ) :: t_sfc     !< surface temperature           [K]  (ncol)
     real(wp), dimension(:,:),          intent(in   ) :: sfc_emis  !< emissivity at surface         []   (nband, ncol)
     class(ty_optical_props_arry),      intent(in   ) :: cloud_props !< cloud optical properties (ncol,nlay,ngpt)
-    class(ty_fluxes_byband),                  intent(inout) :: allsky_fluxes, clrsky_fluxes ! 3/21 - _byband bpm
+    class(ty_fluxes_byband),           intent(inout) :: allsky_fluxes, clrsky_fluxes ! 3/21 - _byband bpm
 
     ! Optional inputs
     class(ty_optical_props_arry),  &
@@ -88,8 +88,6 @@ contains
     ! Problem sizes
     !
     
-    write(iulog,*) '** INSIDE rte_lw (1)--> start setup'
-
     error_msg = ""
 
     ncol  = size(p_lay, 1)
@@ -97,15 +95,11 @@ contains
     ngpt  = k_dist%get_ngpt()
     nband = k_dist%get_nband()
 
-    write(iulog,*) '** INSIDE rte_lw (2)--> ncol: ',ncol, ', nlay: ', nlay,', ngpt: ',ngpt,', nband: ',nband
-
     !$acc kernels copyout(top_at_1)
     !$omp target map(from:top_at_1)
     top_at_1 = p_lay(1, 1) < p_lay(1, nlay)
     !$acc end kernels
     !$omp end target
-
-    write(iulog,*) '** INSIDE rte_lw (3) --> top_at_1= ',top_at_1
 
     ! ------------------------------------------------------------------------------------
     !  Error checking
@@ -118,7 +112,7 @@ contains
         error_msg = "rrtmpg_lw: aerosol properties inconsistently sized"
     end if
 
-    write(iulog,*) '** INSIDE rte_lw --> past aerosol property check'
+    ! write(iulog,*) '** INSIDE rte_lw --> past aerosol property check'
 
     if(present(t_lev)) then
       if(any([size(t_lev, 1), &
@@ -126,7 +120,7 @@ contains
         error_msg = "rrtmpg_lw: t_lev inconsistently sized"
     end if
 
-    write(iulog,*) '** INSIDE rte_lw --> past t_lev consistency check'
+    ! write(iulog,*) '** INSIDE rte_lw --> past t_lev consistency check'
 
     if(present(inc_flux)) then
       if(any([size(inc_flux, 1), &
@@ -135,7 +129,7 @@ contains
     end if
     if(len_trim(error_msg) > 0) return
 
-    write(iulog,*) '** INSIDE rte_lw --> past incident flux consistency check'
+    ! write(iulog,*) '** INSIDE rte_lw --> past incident flux consistency check'
 
     ! ------------------------------------------------------------------------------------
     ! Optical properties arrays
@@ -150,26 +144,26 @@ contains
         nstr = size(cloud_props%tau,1)
     end select
 
-    write(iulog,*) '** INSIDE rte_lw --> past cloud properties check'
+    ! write(iulog,*) '** INSIDE rte_lw --> past cloud properties check'
 
     error_msg = optical_props%init(k_dist)
 
-    write(iulog,*) '**^ INSIDE rte_lw optical properties init --> error_msg: ',error_msg
+    ! write(iulog,*) '**^ INSIDE rte_lw optical properties init --> error_msg: ',error_msg
 
     if(len_trim(error_msg) > 0) return
     select type (optical_props)
       class is (ty_optical_props_1scl) ! No scattering
         error_msg = optical_props%alloc_1scl(ncol, nlay)
-        write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_1scl) --> error_msg: ',error_msg
+        ! write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_1scl) --> error_msg: ',error_msg
       class is (ty_optical_props_2str)
         error_msg = optical_props%alloc_2str(ncol, nlay)
-        write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_2str) --> error_msg: ',error_msg
+        ! write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_2str) --> error_msg: ',error_msg
       class is (ty_optical_props_nstr)
         error_msg = optical_props%alloc_nstr(nstr, ncol, nlay)
-        write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_nstr) --> error_msg: ',error_msg
+        ! write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_nstr) --> error_msg: ',error_msg
       end select
     if (error_msg /= '') return
-    write(iulog,*) '** INSIDE rte_lw --> past optical properties check.'
+    ! write(iulog,*) '** INSIDE rte_lw --> past optical properties check.'
 
     !
     ! Source function
@@ -178,7 +172,7 @@ contains
     error_msg = sources%alloc(ncol, nlay)
     if (error_msg /= '') return
 
-    write(iulog,*) '** INSIDE rte_lw --> source function initialized/allocated'    
+    ! write(iulog,*) '** INSIDE rte_lw --> source function initialized/allocated'    
 
     ! ------------------------------------------------------------------------------------
     ! Clear skies
@@ -193,7 +187,7 @@ contains
         return
     end if
 
-    write(iulog,*) '** INSIDE rte_lw --> gas optics done'
+    ! write(iulog,*) '** INSIDE rte_lw --> gas optics done'
 
     ! ----------------------------------------------------
     ! Clear sky is gases + aerosols (if they're supplied)
@@ -212,7 +206,7 @@ contains
         return
     end if
 
-    write(iulog,*) 'rte_lw --> base_rte_lw (clear-sky) COMPLETE'
+    ! write(iulog,*) 'rte_lw --> base_rte_lw (clear-sky) COMPLETE'
 
     ! ------------------------------------------------------------------------------------
     ! All-sky fluxes = clear skies + clouds
@@ -220,18 +214,18 @@ contains
     error_msg = cloud_props%increment(optical_props)
     if(error_msg /= '') return
 
-    write(iulog,*) 'rte_lw --> continue to base_rte_lw (all-sky) '
+    ! write(iulog,*) 'rte_lw --> continue to base_rte_lw (all-sky) '
 
     error_msg = base_rte_lw(optical_props, top_at_1, sources, &
                             sfc_emis, allsky_fluxes,          &
                             inc_flux, n_gauss_angles)
 
-    write(iulog,*) 'rte_lw --> base_rte_lw (all-sky) COMPLETE'
+    ! write(iulog,*) 'rte_lw --> base_rte_lw (all-sky) COMPLETE'
 
     call sources%finalize()
     call optical_props%finalize()
 
-    write(iulog,*) 'rte_lw (rrtmgp_driver) COMPLETE.'
+    ! write(iulog,*) 'rte_lw (rrtmgp_driver) COMPLETE.'
 
   end function rte_lw
   ! --------------------------------------------------  
@@ -240,7 +234,11 @@ contains
   function rte_sw(k_dist, gas_concs, p_lay, t_lay, p_lev, &
                                  mu0, sfc_alb_dir, sfc_alb_dif, cloud_props, &
                                  allsky_fluxes, clrsky_fluxes,           &
-                                 aer_props, col_dry, inc_flux) result(error_msg)
+                                 aer_props, col_dry, &
+                                 inc_flux,       & !< optional input: total solar irradiance (ncol, ngpt)
+                                 tsi_scaling,    & !< optional input: scalar scaling factor for TSI
+                                 tsi_scaling_gpt & !< optional input: scaling for TSI by gpt
+                                 ) result(error_msg)
     ! class(ty_gas_optics),              intent(in   ) :: k_dist       !< derived type with spectral information
     class(ty_gas_optics_rrtmgp),       intent(in   ) :: k_dist       !< derived type with spectral information
     
@@ -259,6 +257,9 @@ contains
     real(wp), dimension(:,:), &
               optional,       intent(in ) :: col_dry, &  !< Molecular number density (ncol, nlay)
                                              inc_flux    !< incident flux at domain top [W/m2] (ncol, ngpts)
+    real(wp), optional,       intent(in ) :: tsi_scaling !< Optional scaling for total solar irradiance (SCALAR)
+    real(wp), dimension(:), optional,  intent(in ) :: tsi_scaling_gpt !< Optional scaling of solar irradiance by gpoint
+
 
     character(len=128)                    :: error_msg
     ! --------------------------------
@@ -267,12 +268,13 @@ contains
     class(ty_optical_props_arry), allocatable :: optical_props
     real(wp), dimension(:,:),     allocatable :: toa_flux
     integer :: ncol, nlay, ngpt, nband, nstr
+    integer :: icol
     logical :: top_at_1
     ! --------------------------------
     ! Problem sizes
     !
 
-    write(iulog,*) '** INSIDE rte_sw --> start setup'
+    ! write(iulog,*) '** INSIDE rte_sw --> start setup'
 
     error_msg = ""
 
@@ -293,15 +295,25 @@ contains
     if(present(aer_props)) then
       if(any([aer_props%get_ncol(), &
               aer_props%get_nlay()] /= [ncol, nlay])) &
-        error_msg = "rrtmpg_sw: aerosol properties inconsistently sized"
+        error_msg = "rrtmgp_driver rte_sw: aerosol properties inconsistently sized"
       if(.not. any(aer_props%get_ngpt() /= [ngpt, nband])) &
-        error_msg = "rrtmpg_sw: aerosol properties inconsistently sized"
+        error_msg = "rrtmgp_driver rte_sw: aerosol properties inconsistently sized"
+    end if
+
+    if (present(tsi_scaling) .and. (present(tsi_scaling_gpt))) then
+      error_msg = "rrtmgp_driver rte_sw: Only one of [tsi_scaling, tsi_scaling_gpt] may be specified."
+    end if
+
+    if(present(tsi_scaling)) then
+      if(tsi_scaling <= 0._wp) then
+        error_msg = "rrtmgp_driver rte_sw: tsi_scaling is < 0"
+      end if
     end if
 
     if(present(inc_flux)) then
-      if(any([size(inc_flux, 1), &
-              size(inc_flux, 2)] /= [ncol, ngpt])) &
-        error_msg = "rrtmpg_sw: incident flux inconsistently sized"
+      if(any([size(inc_flux, 1), size(inc_flux, 2)] /= [ncol, ngpt])) then
+        error_msg = "rrtmgp_driver rte_sw: incident flux inconsistently sized"
+      end if
     end if
     if(len_trim(error_msg) > 0) return
 
@@ -337,7 +349,7 @@ contains
     ! Clear skies
     !
     ! Gas optical depth -- pressure need to be expressed as Pa
-    !
+    !    
     error_msg = k_dist%gas_optics(p_lay, p_lev, t_lay, gas_concs,  &
                                   optical_props, toa_flux) ! ,                          &
                                                            ! col_dry)
@@ -346,7 +358,20 @@ contains
     !
     ! If users have supplied an incident flux, use that
     !
-    if(present(inc_flux))    toa_flux(:,:) = inc_flux(:,:)
+    if (present(inc_flux)) then
+      toa_flux(:,:) = inc_flux(:,:)
+    end if
+    !
+    ! If there is a scaling provided, apply it
+    !
+    if(present(tsi_scaling)) toa_flux(:,:) = toa_flux(:,:) * tsi_scaling
+
+    if(present(tsi_scaling_gpt)) then
+      do icol = 1,ncol
+        write(iulog,*) '** APPLY tsi_scaling_gpt: initial tsi = ',SUM(toa_flux(icol,:)),' --> after scaling, TSI = ',SUM(toa_flux(icol,:) * tsi_scaling_gpt)
+        toa_flux(icol,:) = toa_flux(icol,:) * tsi_scaling_gpt
+      end do
+    end if
     ! ----------------------------------------------------
     ! Clear sky is gases + aerosols (if they're supplied)
     !

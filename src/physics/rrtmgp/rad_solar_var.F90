@@ -96,15 +96,10 @@ contains
     integer :: yr, mon, day, tod
 
     if ( do_spctrl_scaling ) then
-
       call integrate_spectrum( nbins, nradbins, we, radbinmin, radbinmax, sol_irrad, irrad)
-
       sfac(:nradbins) = irrad(:nradbins)/ref_band_irrad(:nradbins)
-
     else
-
        sfac(:nradbins) = sol_tsi/tsi_ref
-
     endif
 
   end subroutine get_variability

@@ -34,6 +34,10 @@ integer, parameter, public :: nswbands = 14
 ! NOTE: these follow the non-monotonic ordering used for RRTMG 
 ! - This is necessary because the optical properties files made for RRTMG use this order too.
 
+! NOTE: aside from order, as noted, these values match the ones in 
+! RRTMGP coefficients files. But I think we should be *setting* these
+! values based on what is in that file, rather than hard-coding it here. 
+
 real(r8),parameter :: wavenum_low(nswbands) = & ! in cm^-1
    (/2600._r8, 3250._r8, 4000._r8, 4650._r8, 5150._r8, 6150._r8, 7700._r8, &
    8050._r8,12850._r8,16000._r8,22650._r8,29000._r8,38000._r8,  820._r8/)
