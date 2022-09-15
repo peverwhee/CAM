@@ -32,7 +32,7 @@ module rrtmgp_driver
                               ty_optical_props_2str, &
                               ty_optical_props_nstr
   use mo_source_functions,  only: ty_source_func_lw
-  use mo_fluxes,            only: ty_fluxes   ! maybe not needed for CAM if we just use mo_fluxes_byband
+  ! use mo_fluxes,            only: ty_fluxes   ! not needed b/c mo_fluxes_byband extends this type
   use mo_fluxes_byband,   only: ty_fluxes_byband  
   use mo_rte_lw,        only: base_rte_lw => rte_lw
   use mo_rte_sw,        only: base_rte_sw => rte_sw
@@ -368,7 +368,6 @@ contains
 
     if(present(tsi_scaling_gpt)) then
       do icol = 1,ncol
-        write(iulog,*) '** APPLY tsi_scaling_gpt: initial tsi = ',SUM(toa_flux(icol,:)),' --> after scaling, TSI = ',SUM(toa_flux(icol,:) * tsi_scaling_gpt)
         toa_flux(icol,:) = toa_flux(icol,:) * tsi_scaling_gpt
       end do
     end if

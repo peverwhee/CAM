@@ -1007,8 +1007,6 @@ subroutine radiation_tend( &
    integer :: nlevcam, nlevrad
    real(r8) :: tsi 
    real(r8) :: mem_hw_end, mem_hw_beg, mem_end, mem_beg, temp
-   real(r8) :: infinity       ! bpm: use this to check for inf in fluxes
-   infinity = HUGE(infinity)  ! bpm: make it as big as possible
 
    !--------------------------------------------------------------------------------------
 
@@ -1496,39 +1494,10 @@ subroutine radiation_tend( &
                   write(iulog, *) 'rte_sw: Increase in memory usage = ',    &
                       temp, ' (MB)'
                end if
-               ! bpm: check if there are inf in fluxes:
-               if (ANY(fsw%bnd_flux_up > infinity)) then
-                  write(iulog,*) 'WARNING: INF DETECTED IN fsw%bnd_flux_up at timestep ',get_nstep()
-               end if
-               if (ANY(fsw%bnd_flux_dn > infinity)) then
-                  write(iulog,*) 'WARNING: INF DETECTED IN fsw%bnd_flux_dn at timestep ',get_nstep()
-               end if
-               if (ANY(fsw%bnd_flux_net > infinity)) then
-                  write(iulog,*) 'WARNING: INF DETECTED IN fsw%bnd_flux_net at timestep ',get_nstep()
-               end if
-               if (ANY(fsw%bnd_flux_dn_dir > infinity)) then
-                  write(iulog,*) 'WARNING: INF DETECTED IN fsw%bnd_flux_dn_dir at timestep ',get_nstep()
-               end if
-               if (ANY(fswc%bnd_flux_up > infinity)) then
-                  write(iulog,*) 'WARNING: INF DETECTED IN fswc%bnd_flux_up at timestep ',get_nstep()
-               end if
-               if (ANY(fswc%bnd_flux_dn > infinity)) then
-                  write(iulog,*) 'WARNING: INF DETECTED IN fswc%bnd_flux_dn at timestep ',get_nstep()
-               end if
-               if (ANY(fswc%bnd_flux_net > infinity)) then
-                  write(iulog,*) 'WARNING: INF DETECTED IN fswc%bnd_flux_net at timestep ',get_nstep()
-               end if
-               if (ANY(fswc%bnd_flux_dn_dir > infinity)) then
-                  write(iulog,*) 'WARNING: INF DETECTED IN fswc%bnd_flux_dn_dir at timestep ',get_nstep()
-               end if
-
 
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_sw: '//trim(errmsg))
                end if
-               write(iulog,*) 'Radiation_Tend finished rte_sw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
-
-
                !
                ! -- shortwave output -- 
                !
@@ -1704,7 +1673,6 @@ subroutine radiation_tend( &
                ! how to validate kdist_lw
 
                ! Compute LW fluxes
-               write(iulog,*) 'Radiation_Tend about to start rte_lw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
                errmsg = rte_lw(kdist_lw,         & ! input
                                gas_concs_lw,     & ! input, (rrtmgp_set_gases_lw)
                                pmid_rad,         & ! input, (rrtmgp_set_state)
@@ -1720,8 +1688,6 @@ subroutine radiation_tend( &
                if (len_trim(errmsg) > 0) then
                   call endrun(sub//': ERROR code returned by rte_lw: '//trim(errmsg))
                end if
-               write(iulog,*) 'Radiation_Tend finished rte_lw at timestep ',get_nstep(), ' (chunk: ',lchnk,')'
-
                !
                ! -- longwave output --
                !
