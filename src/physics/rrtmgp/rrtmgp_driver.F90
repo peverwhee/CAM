@@ -112,15 +112,11 @@ contains
         error_msg = "rrtmpg_lw: aerosol properties inconsistently sized"
     end if
 
-    ! write(iulog,*) '** INSIDE rte_lw --> past aerosol property check'
-
     if(present(t_lev)) then
       if(any([size(t_lev, 1), &
               size(t_lev, 2)] /= [ncol, nlay+1])) &
         error_msg = "rrtmpg_lw: t_lev inconsistently sized"
     end if
-
-    ! write(iulog,*) '** INSIDE rte_lw --> past t_lev consistency check'
 
     if(present(inc_flux)) then
       if(any([size(inc_flux, 1), &
@@ -128,8 +124,6 @@ contains
         error_msg = "rrtmpg_lw: incident flux inconsistently sized"
     end if
     if(len_trim(error_msg) > 0) return
-
-    ! write(iulog,*) '** INSIDE rte_lw --> past incident flux consistency check'
 
     ! ------------------------------------------------------------------------------------
     ! Optical properties arrays
@@ -144,26 +138,18 @@ contains
         nstr = size(cloud_props%tau,1)
     end select
 
-    ! write(iulog,*) '** INSIDE rte_lw --> past cloud properties check'
-
     error_msg = optical_props%init(k_dist)
-
-    ! write(iulog,*) '**^ INSIDE rte_lw optical properties init --> error_msg: ',error_msg
 
     if(len_trim(error_msg) > 0) return
     select type (optical_props)
       class is (ty_optical_props_1scl) ! No scattering
         error_msg = optical_props%alloc_1scl(ncol, nlay)
-        ! write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_1scl) --> error_msg: ',error_msg
       class is (ty_optical_props_2str)
         error_msg = optical_props%alloc_2str(ncol, nlay)
-        ! write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_2str) --> error_msg: ',error_msg
       class is (ty_optical_props_nstr)
         error_msg = optical_props%alloc_nstr(nstr, ncol, nlay)
-        ! write(iulog,*) '**^ INSIDE rte_lw optical properties select (ty_optical_props_nstr) --> error_msg: ',error_msg
       end select
     if (error_msg /= '') return
-    ! write(iulog,*) '** INSIDE rte_lw --> past optical properties check.'
 
     !
     ! Source function
@@ -171,8 +157,6 @@ contains
     error_msg = sources%init(k_dist)
     error_msg = sources%alloc(ncol, nlay)
     if (error_msg /= '') return
-
-    ! write(iulog,*) '** INSIDE rte_lw --> source function initialized/allocated'    
 
     ! ------------------------------------------------------------------------------------
     ! Clear skies
@@ -184,10 +168,8 @@ contains
                                                           ! col_dry, t_lev)
                                                           ! col_dry & t_lev are optional, and we have not provided them.
     if (error_msg /= '') then
-        return
+      return
     end if
-
-    ! write(iulog,*) '** INSIDE rte_lw --> gas optics done'
 
     ! ----------------------------------------------------
     ! Clear sky is gases + aerosols (if they're supplied)
@@ -206,40 +188,40 @@ contains
         return
     end if
 
-    ! write(iulog,*) 'rte_lw --> base_rte_lw (clear-sky) COMPLETE'
-
     ! ------------------------------------------------------------------------------------
     ! All-sky fluxes = clear skies + clouds
     !
     error_msg = cloud_props%increment(optical_props)
     if(error_msg /= '') return
 
-    ! write(iulog,*) 'rte_lw --> continue to base_rte_lw (all-sky) '
-
     error_msg = base_rte_lw(optical_props, top_at_1, sources, &
                             sfc_emis, allsky_fluxes,          &
                             inc_flux, n_gauss_angles)
 
-    ! write(iulog,*) 'rte_lw --> base_rte_lw (all-sky) COMPLETE'
-
     call sources%finalize()
     call optical_props%finalize()
-
-    ! write(iulog,*) 'rte_lw (rrtmgp_driver) COMPLETE.'
 
   end function rte_lw
   ! --------------------------------------------------  
   ! --------------------------------------------------
   ! --------------------------------------------------
-  function rte_sw(k_dist, gas_concs, p_lay, t_lay, p_lev, &
-                                 mu0, sfc_alb_dir, sfc_alb_dif, cloud_props, &
-                                 allsky_fluxes, clrsky_fluxes,           &
-                                 aer_props, col_dry, &
-                                 inc_flux,       & !< optional input: total solar irradiance (ncol, ngpt)
-                                 tsi_scaling,    & !< optional input: scalar scaling factor for TSI
-                                 tsi_scaling_gpt & !< optional input: scaling for TSI by gpt
-                                 ) result(error_msg)
-    ! class(ty_gas_optics),              intent(in   ) :: k_dist       !< derived type with spectral information
+  function rte_sw(k_dist,         &
+                  gas_concs,      &
+                  p_lay,          &
+                  t_lay,          &
+                  p_lev,          &
+                  mu0,            &
+                  sfc_alb_dir,    &
+                  sfc_alb_dif,    &
+                  cloud_props,    &
+                  allsky_fluxes,  &
+                  clrsky_fluxes,  &
+                  aer_props,      &
+                  col_dry,        &
+                  inc_flux,       & !< optional input: total solar irradiance (ncol, ngpt)
+                  tsi_scaling,    & !< optional input: scalar scaling factor for TSI
+                  tsi_scaling_gpt & !< optional input: scaling for TSI by gpt
+                ) result(error_msg)
     class(ty_gas_optics_rrtmgp),       intent(in   ) :: k_dist       !< derived type with spectral information
     
     type(ty_gas_concs),                intent(in   ) :: gas_concs    !< derived type encapsulating gas concentrations
@@ -273,8 +255,6 @@ contains
     ! --------------------------------
     ! Problem sizes
     !
-
-    ! write(iulog,*) '** INSIDE rte_sw --> start setup'
 
     error_msg = ""
 
@@ -391,10 +371,14 @@ contains
         return
     end if
 
-    error_msg = base_rte_sw(optical_props, top_at_1,  &
-                               mu0, toa_flux,                   &
-                               sfc_alb_dir, sfc_alb_dif,        &
-                               allsky_fluxes)
+    error_msg = base_rte_sw(optical_props, & ! (in) Optical properties provided as arrays
+                            top_at_1,      & ! (in) Is the top of the domain at index 1?
+                            mu0,           & ! (in) cosine of solar zenith angle (ncol)
+                            toa_flux,      & ! (in) incident flux at top of domain [W/m2] (ncol, ngpt)
+                            sfc_alb_dir,   & ! (in) surface albedo, direct (nband, ncol)
+                            sfc_alb_dif,   & ! (in) surface albedo, diffuse (nband, ncol)
+                            allsky_fluxes  & ! (inout) Class describing output calculations (ty_fluxes_byband)
+                            )
 
 
     call optical_props%finalize()

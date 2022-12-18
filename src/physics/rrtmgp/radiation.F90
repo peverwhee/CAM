@@ -59,6 +59,10 @@ use cam_abortutils,      only: endrun
 use error_messages,      only: handle_err
 use cam_logfile,         only: iulog
 use scamMod,             only: scm_crm_mode, single_column, have_cld, cldobs
+
+! use cospsimulator_intr,  only: docosp, cospsimulator_intr_init, &
+!                                cospsimulator_intr_run, cosp_nradsteps
+
 use b_checker,           only: check_bounds
 
 implicit none
@@ -79,8 +83,10 @@ public :: &
    radiation_tend,           &! compute heating rates and fluxes
    rad_out_t                  ! type for diagnostic outputs
 
-real(r8), public, protected :: nextsw_cday       ! future radiation calday for surface models
+! integer,public, allocatable :: cosp_cnt(:)       ! counter for cosp
+! integer,public              :: cosp_cnt_init = 0 !initial value for cosp counter
 
+real(r8), public, protected :: nextsw_cday       ! future radiation calday for surface models
 
 type rad_out_t
    real(r8) :: solin(pcols)         ! Solar incident flux
@@ -214,7 +220,7 @@ integer, allocatable :: band2gpt_lw(:,:)
 ! BPM: use radconstants to define the active gases:
 character(len=gasnamelength), dimension(nradgas) :: active_gases = gaslist
 
-
+! type(var_desc_t) :: cospcnt_desc  ! cosp
 type(var_desc_t) :: nextsw_cday_desc
 
 !===============================================================================
@@ -560,6 +566,14 @@ subroutine radiation_init(pbuf2d)
       irad_always = irad_always + nstep
    end if
 
+   ! if (docosp) call cospsimulator_intr_init    
+   ! allocate(cosp_cnt(begchunk:endchunk))
+   ! if (is_first_restart_step()) then
+   !    cosp_cnt(begchunk:endchunk) = cosp_cnt_init
+   ! else
+   !    cosp_cnt(begchunk:endchunk) = 0     
+   ! end if
+
    ! Add fields to history buffer
 
    call addfld('TOT_CLD_VISTAU',  (/ 'lev' /), 'A',   '1',             &
@@ -759,6 +773,9 @@ subroutine radiation_define_restart(file)
 
    ierr = pio_def_var(file, 'nextsw_cday', pio_int, nextsw_cday_desc)
    ierr = pio_put_att(file, nextsw_cday_desc, 'long_name', 'future radiation calday for surface models')
+   ! if (docosp) then
+   !    ierr = pio_def_var(File, 'cosp_cnt_init', pio_int, cospcnt_desc)
+   ! end if
 
 end subroutine radiation_define_restart
   
@@ -775,6 +792,9 @@ subroutine radiation_write_restart(file)
    integer :: ierr
    !----------------------------------------------------------------------------
    ierr = pio_put_var(File, nextsw_cday_desc, (/ nextsw_cday /))
+   ! if (docosp) then
+   !    ierr = pio_put_var(File, cospcnt_desc, (/cosp_cnt(begchunk)/))
+   ! end if
 
 end subroutine radiation_write_restart
   
@@ -792,6 +812,16 @@ subroutine radiation_read_restart(file)
    type(var_desc_t) :: vardesc
 
    !----------------------------------------------------------------------------
+   ! if (docosp) then
+   !    call pio_seterrorhandling(File, PIO_BCAST_ERROR, err_handling)
+   !    ierr = pio_inq_varid(File, 'cosp_cnt_init', vardesc)
+   !    call pio_seterrorhandling(File, err_handling)
+   !    if (ierr /= PIO_NOERR) then
+   !       cosp_cnt_init = 0
+   !    else
+   !       ierr = pio_get_var(File, vardesc, cosp_cnt_init)
+   !    end if
+   ! end if
 
    ierr = pio_inq_varid(file, 'nextsw_cday', vardesc)
    ierr = pio_get_var(file, vardesc, nextsw_cday)
@@ -845,6 +875,8 @@ subroutine radiation_tend( &
 
    use interpolate_data,   only: vertinterp
    use tropopause,         only: tropopause_find, TROP_ALG_HYBSTOB, TROP_ALG_CLIMATE
+   ! use cospsimulator_intr, only: docosp, cospsimulator_intr_run, cosp_nradsteps
+
 
    ! Arguments
    type(physics_state), intent(in), target :: state
@@ -994,6 +1026,12 @@ subroutine radiation_tend( &
    real(r8) :: fcns(pcols,pverp)    ! net clear-sky shortwave flux
    real(r8) :: fnl(pcols,pverp)     ! net longwave flux
    real(r8) :: fcnl(pcols,pverp)    ! net clear-sky longwave flux
+
+   
+   ! real(r8) :: emis(pcols,pver)        ! Cloud longwave emissivity           ! for COSP
+   ! real(r8) :: gb_snow_tau(pcols,pver) ! grid-box mean snow_tau              ! for COSP
+   ! real(r8) :: gb_snow_lw(pcols,pver)  ! grid-box mean LW snow optical depth ! for COSP
+
   
    real(r8) :: ftem(pcols,pver)        ! Temporary workspace for outfld variables
 
@@ -1536,7 +1574,7 @@ subroutine radiation_tend( &
             case ('mitchell')
                call ice_cloud_get_rad_props_lw(state, pbuf, ice_lw_abs)
             case default
-               call endrun('iccldoptics must be one either ebertcurry or mitchell')
+               call endrun('ERROR: iccldoptics must be one either ebertcurry or mitchell')
             end select
 
             select case (liqcldoptics)
@@ -1545,7 +1583,7 @@ subroutine radiation_tend( &
             case ('gammadist')
                call liquid_cloud_get_rad_props_lw(state, pbuf, liq_lw_abs)
             case default
-               call endrun('liqcldoptics must be either slingo or gammadist')
+               call endrun('ERROR: liqcldoptics must be either slingo or gammadist')
             end select
 
             cld_lw_abs(:,:ncol,:) = liq_lw_abs(:,:ncol,:) + ice_lw_abs(:,:ncol,:)
@@ -1635,42 +1673,6 @@ subroutine radiation_tend( &
                ! check that optical properties are in bounds:
                call clipper(cloud_lw%tau, 0._r8, huge(cloud_lw%tau))
                call clipper(aer_lw%tau,   0._r8, huge(aer_lw%tau))
-               
-
-               ! call check_bounds(gas_concs_lw, errmsg)
-               ! if (len_trim(errmsg) > 0) then
-               !    call endrun(sub//': ERROR code returned by check_bounds gas_concs_lw: '//trim(errmsg))
-               ! end if
-               ! errmsg = cloud_lw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
-               ! if (len_trim(errmsg) > 0) then
-               !    call endrun(sub//': ERROR code returned by check_bounds cloud_lw: '//trim(errmsg))
-               ! end if
-               ! errmsg = aer_lw%validate()  ! rte provides validate method for tau, ssa, and g all at once.
-               ! if (len_trim(errmsg) > 0) then
-               !    call endrun(sub//': ERROR code returned by check_bounds aer_lw: '//trim(errmsg))
-               ! end if
-               ! call check_bounds(pint_rad, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
-               ! if (len_trim(errmsg) > 0) then
-               !    call endrun(sub//': ERROR code returned by check_bounds pint_rad: '//trim(errmsg))
-               ! end if
-               ! call check_bounds(t_rad, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
-               ! if (len_trim(errmsg) > 0) then
-               !    call endrun(sub//': ERROR code returned by check_bounds t_rad: '//trim(errmsg))
-               ! end if
-               ! call check_bounds(pmid_rad, 120000.0_r8, 1.0_r8, errmsg)  ! Pa -- give pretty big bounds
-               ! if (len_trim(errmsg) > 0) then
-               !    call endrun(sub//': ERROR code returned by check_bounds pint_rad: '//trim(errmsg))
-               ! end if
-               ! call check_bounds(t_sfc, 350.0_r8, 150.0_r8, errmsg)  ! K -- give pretty big bounds
-               ! if (len_trim(errmsg) > 0) then
-               !    call endrun(sub//': ERROR code returned by check_bounds t_sfc: '//trim(errmsg))
-               ! end if
-               ! call check_bounds(emis_sfc, 1.0_r8, 0.0_r8, errmsg)  ! Is this being set correctly????
-               ! if (len_trim(errmsg) > 0) then
-               !    write(iulog,*) 'surface emissivity shape: ',SHAPE(emis_sfc),' min: ',MINVAL(emis_sfc),' max: ',MAXVAL(emis_sfc)
-               !    call endrun(sub//': ERROR code returned by check_bounds emis_sfc: '//trim(errmsg))
-               ! end if
-               ! how to validate kdist_lw
 
                ! Compute LW fluxes
                errmsg = rte_lw(kdist_lw,         & ! input
@@ -1686,6 +1688,13 @@ subroutine radiation_tend( &
                                aer_props=aer_lw  & ! optional input, (rrtmgp_set_aer_lw)  
                ) ! note inc_flux is an optional input, but as defined in set_rrtmgp_state, it is only for shortwave
                if (len_trim(errmsg) > 0) then
+                  !
+                  ! DEBUG -- if we die here, find out why
+                  !
+                  write(iulog,*) '** [radiation_tend] DIAGNOSE LW CRASH **'
+                  do i = 1,ncol
+                     write(iulog,*) 'ncol = ',ncol,' t_sfc = ',t_sfc(i),' AT LOCATION lat = ', clat(i), ' lon = ', clon(i)
+                  end do
                   call endrun(sub//': ERROR code returned by rte_lw: '//trim(errmsg))
                end if
                !
@@ -1713,6 +1722,53 @@ subroutine radiation_tend( &
          t_sfc, emis_sfc, t_rad, pmid_rad, pint_rad,     &
          t_day, pmid_day, pint_day, coszrs_day, alb_dir, &
          alb_dif)
+
+
+      !!! *** BEGIN COSP ***
+      ! if (docosp) then
+      !    ! initialize and calculate emis
+      !    emis(:,:) = 0._r8
+      !    emis(:ncol,:) = 1._r8 - exp(-cld_lw_abs(rrtmg_lw_cloudsim_band,:ncol,:))
+      !    call outfld('EMIS', emis, pcols, lchnk)
+
+      !    ! compute grid-box mean SW and LW snow optical depth for use by COSP
+      !    gb_snow_tau(:,:) = 0._r8
+      !    gb_snow_lw(:,:)  = 0._r8
+      !    if (cldfsnow_idx > 0) then
+      !       do i = 1, ncol
+      !          do k = 1, pver
+      !             if (cldfsnow(i,k) > 0._r8) then
+
+      !                ! Add graupel to snow tau for cosp
+      !                if (cldfgrau_idx > 0 .and. graupel_in_rad) then
+      !                   gb_snow_tau(i,k) = snow_tau(rrtmg_sw_cloudsim_band,i,k)*cldfsnow(i,k) + &
+      !                         grau_tau(rrtmg_sw_cloudsim_band,i,k)*cldfgrau(i,k)
+      !                   gb_snow_lw(i,k)  = snow_lw_abs(rrtmg_lw_cloudsim_band,i,k)*cldfsnow(i,k) + &
+      !                         grau_lw_abs(rrtmg_lw_cloudsim_band,i,k)*cldfgrau(i,k)
+      !                else
+      !                   gb_snow_tau(i,k) = snow_tau(rrtmg_sw_cloudsim_band,i,k)*cldfsnow(i,k)
+      !                   gb_snow_lw(i,k)  = snow_lw_abs(rrtmg_lw_cloudsim_band,i,k)*cldfsnow(i,k)
+      !                end if
+      !             end if
+      !          end do
+      !       end do
+      !    end if
+
+      !    ! advance counter for this timestep (chunk dimension required for thread safety)
+      !    cosp_cnt(lchnk) = cosp_cnt(lchnk) + 1
+
+      !    ! if counter is the same as cosp_nradsteps, run cosp and reset counter
+      !    if (cosp_nradsteps .eq. cosp_cnt(lchnk)) then
+
+      !       ! N.B.: For snow optical properties, the GRID-BOX MEAN shortwave and longwave
+      !       !       optical depths are passed.
+      !       call cospsimulator_intr_run(state,  pbuf, cam_in, emis, coszrs, &
+      !          cld_swtau_in=cld_tau(rrtmg_sw_cloudsim_band,:,:),&
+      !          snow_tau_in=gb_snow_tau, snow_emis_in=gb_snow_lw)
+      !       cosp_cnt(lchnk) = 0
+      !    end if
+      ! end if   
+      !!! *** END COSP ***
       
    else   !  if (dosw .or. dolw) --> no radiation being done.
       ! convert radiative heating rates from Q*dp to Q for energy conservation
@@ -1731,7 +1787,7 @@ subroutine radiation_tend( &
 
    end if   ! if (dosw .or. dolw) then
 
-   write(iulog,*) 'Radiation_Tend finished calculation [timestep ',get_nstep(), ', chunk: ',lchnk,'] -- qrs max: ',maxval(qrs),' min: ',minval(qrs),' -- qrl max: ',maxval(qrl), ' min: ',minval(qrl)
+   ! write(iulog,*) 'Radiation_Tend finished calculation [timestep ',get_nstep(), ', chunk: ',lchnk,'] -- qrs max: ',maxval(qrs),' min: ',minval(qrs),' -- qrl max: ',maxval(qrl), ' min: ',minval(qrl)
 
 
    ! ------------------------------------------------------------------------
@@ -1780,7 +1836,7 @@ subroutine radiation_tend( &
    call free_fluxes(flw)
    call free_fluxes(flwc)
 
-   write(iulog,*) 'Radiation_Tend END [timestep ',get_nstep(), ', chunk: ',lchnk,']'
+   ! write(iulog,*) 'Radiation_Tend END [timestep ',get_nstep(), ', chunk: ',lchnk,']'
    
 !-------------------------------------------------------------------------------
 contains
@@ -1878,17 +1934,17 @@ contains
       do i = 1, nday
          ! These use hard-coded indexes assuming default RRTMGP sw bands
          ! Should be generalized to use specified frequencies.
-         cam_out%soll(idxday(i)) = sum(fsw%bnd_flux_dn_dir(i,1,1:9))      &
-                                   + 0.5_r8 * fsw%bnd_flux_dn_dir(i,1,10) 
+         cam_out%soll(idxday(i)) = sum(fsw%bnd_flux_dn_dir(i,nlay+1,1:9))      &
+                                   + 0.5_r8 * fsw%bnd_flux_dn_dir(i,nlay+1,10) 
 
-         cam_out%sols(idxday(i)) = 0.5_r8 * fsw%bnd_flux_dn_dir(i,1,10)   &
-                                   + sum(fsw%bnd_flux_dn_dir(i,1,11:14))
+         cam_out%sols(idxday(i)) = 0.5_r8 * fsw%bnd_flux_dn_dir(i,nlay+1,10)   &
+                                   + sum(fsw%bnd_flux_dn_dir(i,nlay+1,11:14))
 
-         cam_out%solld(idxday(i)) = sum(flux_dn_diffuse(i,1,1:8))         &
-                                    + 0.5_r8 * flux_dn_diffuse(i,1,10)
+         cam_out%solld(idxday(i)) = sum(flux_dn_diffuse(i,nlay+1,1:9))         &
+                                    + 0.5_r8 * flux_dn_diffuse(i,nlay+1,10)
          
-         cam_out%solsd(idxday(i)) = 0.5_r8 * flux_dn_diffuse(i, 1, 10)    &
-                                    + sum(flux_dn_diffuse(i,1,11:14))
+         cam_out%solsd(idxday(i)) = 0.5_r8 * flux_dn_diffuse(i, nlay+1, 10)    &
+                                    + sum(flux_dn_diffuse(i,nlay+1,11:14))
                                    
       end do
 
@@ -2007,6 +2063,7 @@ subroutine radiation_output_sw(lchnk, ncol, icall, rd, pbuf, cam_out)
    real(r8), pointer :: fsnt(:)
    real(r8), pointer :: fsns(:)
    real(r8), pointer :: fsds(:)
+   real(r8), pointer :: su(:,:),sd(:,:),lu(:,:),ld(:,:)
 
    real(r8) :: ftem(pcols)
    !----------------------------------------------------------------------------
@@ -2018,7 +2075,7 @@ subroutine radiation_output_sw(lchnk, ncol, icall, rd, pbuf, cam_out)
 
    call outfld('SOLIN'//diag(icall),    rd%solin,      pcols, lchnk)
 
-   call outfld('QRS'//diag(icall),      qrs(:ncol,:)/cpair,     ncol, lchnk)
+   call outfld('QRS'//diag(icall),      qrs(:ncol,:)/cpair,     ncol, lchnk) ! not sure why ncol instead of pcols, but matches RRTMG version
    call outfld('QRSC'//diag(icall),     rd%qrsc(:ncol,:)/cpair, ncol, lchnk)
 
    call outfld('FSNT'//diag(icall),    rd%flux_sw_net_top, pcols, lchnk)
@@ -2055,6 +2112,7 @@ subroutine radiation_output_sw(lchnk, ncol, icall, rd, pbuf, cam_out)
    call outfld('FUSC'//diag(icall), rd%flux_sw_clr_up, pcols, lchnk)
    call outfld('FDS'//diag(icall),  rd%flux_sw_dn,     pcols, lchnk)
    call outfld('FDSC'//diag(icall), rd%flux_sw_clr_dn, pcols, lchnk)
+
 end subroutine radiation_output_sw
 
 
