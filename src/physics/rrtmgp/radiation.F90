@@ -27,8 +27,20 @@ use rad_constituents,    only: N_DIAG, rad_cnst_get_call_list, &
                                liqcldoptics,                   &
                                icecldoptics
 
-use radconstants,        only: nswbands, nlwbands, rrtmg_sw_cloudsim_band, rrtmg_lw_cloudsim_band, &
-                               idx_sw_diag, rrtmg_to_rrtmgp_swbands, gasnamelength, nradgas, gaslist
+use radconstants,        only: nswbands, nlwbands, & ! number of bands
+                               idx_sw_diag,        & ! indices for diagnostics
+                               idx_nir_diag,       &
+                               idx_uv_diag,        & 
+                               idx_lw_diag,        &
+                               get_idx_sw_diag,    & ! sets the idx_*_diag in radconstants module
+                               get_idx_nir_diag,   &
+                               get_idx_uv_diag,    &
+                               get_idx_lw_diag,    &  
+                               rrtmg_to_rrtmgp_swbands, & ! maps bands between rrtmg and rrtmgp
+                               get_band_index_by_value, & ! function that figures out band for a wavelength
+                               gasnamelength,      &
+                               nradgas,            &
+                               gaslist
 
 use mo_gas_concentrations, only: ty_gas_concs
 use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
@@ -60,14 +72,11 @@ use error_messages,      only: handle_err
 use cam_logfile,         only: iulog
 use scamMod,             only: scm_crm_mode, single_column, have_cld, cldobs
 
-! use cospsimulator_intr,  only: docosp, cospsimulator_intr_init, &
-!                                cospsimulator_intr_run, cosp_nradsteps
+use cospsimulator_intr,  only: docosp, cospsimulator_intr_init, &
+                               cospsimulator_intr_run, cosp_nradsteps
 
-use b_checker,           only: check_bounds
 
 implicit none
-
-
 private
 save
 
@@ -83,8 +92,9 @@ public :: &
    radiation_tend,           &! compute heating rates and fluxes
    rad_out_t                  ! type for diagnostic outputs
 
-! integer,public, allocatable :: cosp_cnt(:)       ! counter for cosp
-! integer,public              :: cosp_cnt_init = 0 !initial value for cosp counter
+integer,public, allocatable :: cosp_cnt(:)       ! counter for cosp
+integer,public              :: cosp_cnt_init = 0 !initial value for cosp counter
+integer, public :: sw_cloudsim_band, lw_cloudsim_band ! radiation bands that COSP uses
 
 real(r8), public, protected :: nextsw_cday       ! future radiation calday for surface models
 
@@ -207,7 +217,6 @@ integer :: ngpt_sw
 integer, allocatable :: band2gpt_sw(:,:) ! n[s,l]wbands come from radconstants for now
 integer, allocatable :: band2gpt_lw(:,:)
 
-
 ! Gases to use in the radiative calculations. 
 ! RRTMGP kdist initialization needs to know the names of the
 ! gases before these are available via the rad_cnst interface. 
@@ -220,7 +229,7 @@ integer, allocatable :: band2gpt_lw(:,:)
 ! BPM: use radconstants to define the active gases:
 character(len=gasnamelength), dimension(nradgas) :: active_gases = gaslist
 
-! type(var_desc_t) :: cospcnt_desc  ! cosp
+type(var_desc_t) :: cospcnt_desc  ! cosp
 type(var_desc_t) :: nextsw_cday_desc
 
 !===============================================================================
@@ -512,6 +521,16 @@ subroutine radiation_init(pbuf2d)
    ! kbotradm = nlay
    ! kbotradi = nlay + 1
 
+   ! bpm: set the indices used for diagnostics using specific band:
+   call get_idx_sw_diag() ! index to sw visible band (441 - 625 nm) 
+   call get_idx_nir_diag() ! index to sw near infrared (778-1240 nm) band
+   call get_idx_uv_diag() ! index to sw uv (345-441 nm) band
+   if (docosp) then
+      sw_cloudsim_band = get_band_index_by_value('sw', 0.67_r8, 'micron')  ! rrtmgp band for .67 micron
+      lw_cloudsim_band = get_band_index_by_value('lw', 10.5_r8, 'micron')
+   end if
+   call get_idx_lw_diag()
+
 
    call set_available_gases(active_gases, available_gases) ! gases needed to initialize spectral info
 
@@ -566,13 +585,13 @@ subroutine radiation_init(pbuf2d)
       irad_always = irad_always + nstep
    end if
 
-   ! if (docosp) call cospsimulator_intr_init    
-   ! allocate(cosp_cnt(begchunk:endchunk))
-   ! if (is_first_restart_step()) then
-   !    cosp_cnt(begchunk:endchunk) = cosp_cnt_init
-   ! else
-   !    cosp_cnt(begchunk:endchunk) = 0     
-   ! end if
+   if (docosp) call cospsimulator_intr_init    
+   allocate(cosp_cnt(begchunk:endchunk))
+   if (is_first_restart_step()) then
+      cosp_cnt(begchunk:endchunk) = cosp_cnt_init
+   else
+      cosp_cnt(begchunk:endchunk) = 0     
+   end if
 
    ! Add fields to history buffer
 
@@ -773,9 +792,9 @@ subroutine radiation_define_restart(file)
 
    ierr = pio_def_var(file, 'nextsw_cday', pio_int, nextsw_cday_desc)
    ierr = pio_put_att(file, nextsw_cday_desc, 'long_name', 'future radiation calday for surface models')
-   ! if (docosp) then
-   !    ierr = pio_def_var(File, 'cosp_cnt_init', pio_int, cospcnt_desc)
-   ! end if
+   if (docosp) then
+      ierr = pio_def_var(File, 'cosp_cnt_init', pio_int, cospcnt_desc)
+   end if
 
 end subroutine radiation_define_restart
   
@@ -792,9 +811,9 @@ subroutine radiation_write_restart(file)
    integer :: ierr
    !----------------------------------------------------------------------------
    ierr = pio_put_var(File, nextsw_cday_desc, (/ nextsw_cday /))
-   ! if (docosp) then
-   !    ierr = pio_put_var(File, cospcnt_desc, (/cosp_cnt(begchunk)/))
-   ! end if
+   if (docosp) then
+      ierr = pio_put_var(File, cospcnt_desc, (/cosp_cnt(begchunk)/))
+   end if
 
 end subroutine radiation_write_restart
   
@@ -810,18 +829,19 @@ subroutine radiation_read_restart(file)
    ! local variables
    integer :: ierr
    type(var_desc_t) :: vardesc
+   integer :: err_handling
 
    !----------------------------------------------------------------------------
-   ! if (docosp) then
-   !    call pio_seterrorhandling(File, PIO_BCAST_ERROR, err_handling)
-   !    ierr = pio_inq_varid(File, 'cosp_cnt_init', vardesc)
-   !    call pio_seterrorhandling(File, err_handling)
-   !    if (ierr /= PIO_NOERR) then
-   !       cosp_cnt_init = 0
-   !    else
-   !       ierr = pio_get_var(File, vardesc, cosp_cnt_init)
-   !    end if
-   ! end if
+   if (docosp) then
+      call pio_seterrorhandling(File, PIO_BCAST_ERROR, err_handling)
+      ierr = pio_inq_varid(File, 'cosp_cnt_init', vardesc)
+      call pio_seterrorhandling(File, err_handling)
+      if (ierr /= PIO_NOERR) then
+         cosp_cnt_init = 0
+      else
+         ierr = pio_get_var(File, vardesc, cosp_cnt_init)
+      end if
+   end if
 
    ierr = pio_inq_varid(file, 'nextsw_cday', vardesc)
    ierr = pio_get_var(file, vardesc, nextsw_cday)
@@ -875,7 +895,7 @@ subroutine radiation_tend( &
 
    use interpolate_data,   only: vertinterp
    use tropopause,         only: tropopause_find, TROP_ALG_HYBSTOB, TROP_ALG_CLIMATE
-   ! use cospsimulator_intr, only: docosp, cospsimulator_intr_run, cosp_nradsteps
+   use cospsimulator_intr, only: docosp, cospsimulator_intr_run, cosp_nradsteps
 
 
    ! Arguments
@@ -1028,9 +1048,9 @@ subroutine radiation_tend( &
    real(r8) :: fcnl(pcols,pverp)    ! net clear-sky longwave flux
 
    
-   ! real(r8) :: emis(pcols,pver)        ! Cloud longwave emissivity           ! for COSP
-   ! real(r8) :: gb_snow_tau(pcols,pver) ! grid-box mean snow_tau              ! for COSP
-   ! real(r8) :: gb_snow_lw(pcols,pver)  ! grid-box mean LW snow optical depth ! for COSP
+   real(r8) :: emis(pcols,pver)        ! Cloud longwave emissivity           ! for COSP
+   real(r8) :: gb_snow_tau(pcols,pver) ! grid-box mean snow_tau              ! for COSP
+   real(r8) :: gb_snow_lw(pcols,pver)  ! grid-box mean LW snow optical depth ! for COSP
 
   
    real(r8) :: ftem(pcols,pver)        ! Temporary workspace for outfld variables
@@ -1366,7 +1386,8 @@ subroutine radiation_tend( &
          ! SHORTWAVE DIAGNOSTICS & OUTPUT
          ! 
          ! cloud optical depth fields for the visible band
-         ! This uses idx_sw_diag to get a specific band; is hard-coded in radconstants and is correct for RRTMGP ordering.
+         ! This uses idx_sw_diag to get a specific band; 
+         ! is hard-coded in radconstants and is correct for RRTMGP ordering.
          rd%tot_icld_vistau(:ncol,:) = c_cld_tau(idx_sw_diag,:ncol,:) ! should be equal to cloud_sw%tau except ordering
          rd%liq_icld_vistau(:ncol,:) = liq_tau(idx_sw_diag,:ncol,:)
          rd%ice_icld_vistau(:ncol,:) = ice_tau(idx_sw_diag,:ncol,:)
@@ -1499,10 +1520,10 @@ subroutine radiation_tend( &
                ! Still to validate:
                ! - kdist_sw
                ! - gas_concs_sw
-               call check_bounds(gas_concs_sw, errmsg)
-               if (len_trim(errmsg) > 0) then
-                  call endrun(sub//': ERROR code returned by check_bounds gas_concs_sw: '//trim(errmsg))
-               end if
+               ! call check_bounds(gas_concs_sw, errmsg)
+               ! if (len_trim(errmsg) > 0) then
+               !    call endrun(sub//': ERROR code returned by check_bounds gas_concs_sw: '//trim(errmsg))
+               ! end if
                ! call check_bounds(kdist_sw, errmsg)
                call shr_mem_getusage(mem_hw_beg, mem_beg)
                ! inputs are the daylit columns --> output fluxes therefore also on daylit columns. 
@@ -1725,49 +1746,49 @@ subroutine radiation_tend( &
 
 
       !!! *** BEGIN COSP ***
-      ! if (docosp) then
-      !    ! initialize and calculate emis
-      !    emis(:,:) = 0._r8
-      !    emis(:ncol,:) = 1._r8 - exp(-cld_lw_abs(rrtmg_lw_cloudsim_band,:ncol,:))
-      !    call outfld('EMIS', emis, pcols, lchnk)
+      if (docosp) then
+         ! initialize and calculate emis
+         emis(:,:) = 0._r8
+         emis(:ncol,:) = 1._r8 - exp(-cld_lw_abs(lw_cloudsim_band,:ncol,:))
+         call outfld('EMIS', emis, pcols, lchnk)
 
-      !    ! compute grid-box mean SW and LW snow optical depth for use by COSP
-      !    gb_snow_tau(:,:) = 0._r8
-      !    gb_snow_lw(:,:)  = 0._r8
-      !    if (cldfsnow_idx > 0) then
-      !       do i = 1, ncol
-      !          do k = 1, pver
-      !             if (cldfsnow(i,k) > 0._r8) then
+         ! compute grid-box mean SW and LW snow optical depth for use by COSP
+         gb_snow_tau(:,:) = 0._r8
+         gb_snow_lw(:,:)  = 0._r8
+         if (cldfsnow_idx > 0) then
+            do i = 1, ncol
+               do k = 1, pver
+                  if (cldfsnow(i,k) > 0._r8) then
 
-      !                ! Add graupel to snow tau for cosp
-      !                if (cldfgrau_idx > 0 .and. graupel_in_rad) then
-      !                   gb_snow_tau(i,k) = snow_tau(rrtmg_sw_cloudsim_band,i,k)*cldfsnow(i,k) + &
-      !                         grau_tau(rrtmg_sw_cloudsim_band,i,k)*cldfgrau(i,k)
-      !                   gb_snow_lw(i,k)  = snow_lw_abs(rrtmg_lw_cloudsim_band,i,k)*cldfsnow(i,k) + &
-      !                         grau_lw_abs(rrtmg_lw_cloudsim_band,i,k)*cldfgrau(i,k)
-      !                else
-      !                   gb_snow_tau(i,k) = snow_tau(rrtmg_sw_cloudsim_band,i,k)*cldfsnow(i,k)
-      !                   gb_snow_lw(i,k)  = snow_lw_abs(rrtmg_lw_cloudsim_band,i,k)*cldfsnow(i,k)
-      !                end if
-      !             end if
-      !          end do
-      !       end do
-      !    end if
+                     ! Add graupel to snow tau for cosp
+                     if (cldfgrau_idx > 0 .and. graupel_in_rad) then
+                        gb_snow_tau(i,k) = snow_tau(sw_cloudsim_band,i,k)*cldfsnow(i,k) + &
+                              grau_tau(sw_cloudsim_band,i,k)*cldfgrau(i,k)
+                        gb_snow_lw(i,k)  = snow_lw_abs(lw_cloudsim_band,i,k)*cldfsnow(i,k) + &
+                              grau_lw_abs(lw_cloudsim_band,i,k)*cldfgrau(i,k)
+                     else
+                        gb_snow_tau(i,k) = snow_tau(sw_cloudsim_band,i,k)*cldfsnow(i,k)
+                        gb_snow_lw(i,k)  = snow_lw_abs(lw_cloudsim_band,i,k)*cldfsnow(i,k)
+                     end if
+                  end if
+               end do
+            end do
+         end if
 
-      !    ! advance counter for this timestep (chunk dimension required for thread safety)
-      !    cosp_cnt(lchnk) = cosp_cnt(lchnk) + 1
+         ! advance counter for this timestep (chunk dimension required for thread safety)
+         cosp_cnt(lchnk) = cosp_cnt(lchnk) + 1
 
-      !    ! if counter is the same as cosp_nradsteps, run cosp and reset counter
-      !    if (cosp_nradsteps .eq. cosp_cnt(lchnk)) then
+         ! if counter is the same as cosp_nradsteps, run cosp and reset counter
+         if (cosp_nradsteps .eq. cosp_cnt(lchnk)) then
 
-      !       ! N.B.: For snow optical properties, the GRID-BOX MEAN shortwave and longwave
-      !       !       optical depths are passed.
-      !       call cospsimulator_intr_run(state,  pbuf, cam_in, emis, coszrs, &
-      !          cld_swtau_in=cld_tau(rrtmg_sw_cloudsim_band,:,:),&
-      !          snow_tau_in=gb_snow_tau, snow_emis_in=gb_snow_lw)
-      !       cosp_cnt(lchnk) = 0
-      !    end if
-      ! end if   
+            ! N.B.: For snow optical properties, the GRID-BOX MEAN shortwave and longwave
+            !       optical depths are passed.
+            call cospsimulator_intr_run(state,  pbuf, cam_in, emis, coszrs, &
+               cld_swtau_in=cld_tau(sw_cloudsim_band,:,:),&
+               snow_tau_in=gb_snow_tau, snow_emis_in=gb_snow_lw)
+            cosp_cnt(lchnk) = 0
+         end if
+      end if   
       !!! *** END COSP ***
       
    else   !  if (dosw .or. dolw) --> no radiation being done.

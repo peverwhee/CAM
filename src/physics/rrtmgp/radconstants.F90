@@ -62,11 +62,23 @@ real(r8), parameter :: solar_ref_band_irradiance(nswbands) = &
    /)
 
 ! These are indices to the band for diagnostic output
-integer, parameter, public :: idx_sw_diag = 10 ! index to sw visible band (441 - 625 nm) 
-integer, parameter, public :: idx_nir_diag = 8 ! index to sw near infrared (778-1240 nm) band
-integer, parameter, public :: idx_uv_diag = 11 ! index to sw uv (345-441 nm) band
+! CHANGE: rather than make these parameters, provide subroutines that set them 
+!         using the function get_band_index_by_value (which should be called on initializing radiation)
+! integer, parameter, public :: idx_sw_diag = 10 ! index to sw visible band (441 - 625 nm) 
+! integer, parameter, public :: idx_nir_diag = 8 ! index to sw near infrared (778-1240 nm) band
+! integer, parameter, public :: idx_uv_diag = 11 ! index to sw uv (345-441 nm) band
 
-integer, parameter, public :: rrtmg_sw_cloudsim_band = 9  ! rrtmgp band for .67 micron
+! integer, parameter, public :: rrtmg_sw_cloudsim_band = 9  ! rrtmgp band for .67 micron
+! integer, parameter, public :: rrtmgp_sw_cloudsim_band = 10 ! b/c one band moves to beginning
+
+integer, public :: idx_sw_diag ! index to sw visible band (441 - 625 nm) 
+integer, public :: idx_nir_diag! index to sw near infrared (778-1240 nm) band
+integer, public :: idx_uv_diag ! index to sw uv (345-441 nm) band
+
+! CHANGE: instead of setting rrtmg[p]_sw_cloudsim_band in radconstants, just make it in radiation
+! rrtmgp_sw_cloudsim_band = get_band_index_by_value('sw', 0.67_r8, 'micron')  ! rrtmgp band for .67 micron
+! same for lw:
+! rrtmgp_lw_cloudsim_band = get_band_index_by_value('lw', 10.5_r8, 'micron')
 
 ! Number of evenly spaced intervals in rh
 ! The globality of this mesh may not be necessary
@@ -83,10 +95,9 @@ integer, parameter, public :: nrh = 1000
 
 ! LONGWAVE DATA
 
-! These are indices to the band for diagnostic output
-integer, parameter, public :: idx_lw_diag = 7 ! index to (H20 window) LW band
-
-integer, parameter, public :: rrtmg_lw_cloudsim_band = 6  ! rrtmg band for 10.5 micron
+! These are indices to the band for diagnostic output (see comment above about change)
+! integer, parameter, public :: idx_lw_diag = 7 ! index to (H20 window) LW band
+integer, public :: idx_lw_diag
 
 ! number of lw bands
 integer, parameter, public :: nlwbands = 16
@@ -119,7 +130,12 @@ public :: get_number_sw_bands, &
           get_lw_spectral_boundaries, &
           get_ref_solar_band_irrad, &
           get_ref_total_solar_irrad, &
-          get_solar_band_fraction_irrad
+          get_solar_band_fraction_irrad, &
+          get_idx_sw_diag, &
+          get_idx_nir_diag, &
+          get_idx_uv_diag, &
+          get_idx_lw_diag, &
+          get_band_index_by_value
 
 contains
 !------------------------------------------------------------------------------
@@ -237,5 +253,72 @@ integer function rad_gas_index(gasname)
    enddo
    call endrun ("rad_gas_index: can not find gas with name "//gasname)
 end function rad_gas_index
+!------------------------------------------------------------------------------
+subroutine get_idx_sw_diag()
+   idx_sw_diag = get_band_index_by_value('sw', 500.0_r8, 'nm')
+end subroutine
+
+subroutine get_idx_nir_diag()
+   idx_nir_diag = get_band_index_by_value('sw', 1000.0_r8, 'nm')
+end subroutine
+
+subroutine get_idx_uv_diag()
+   idx_uv_diag = get_band_index_by_value('sw', 400._r8, 'nm')
+end subroutine
+
+subroutine get_idx_lw_diag()
+   idx_lw_diag = get_band_index_by_value('lw', 1000.0_r8, 'cm^-1')
+   ! value chosen to match the band used in CESM1/CESM2
+end subroutine
+
+function get_band_index_by_value(swlw, targetvalue, units) result(ans)
+   character(len=*),intent(in) :: swlw  ! sw or lw bands
+   real(r8),intent(in) :: targetvalue  
+   character(len=*),intent(in) :: units ! units of targetvale
+   integer :: ans
+   ! local
+   real(r8), allocatable, dimension(:) :: lowboundaries, highboundaries
+   real(r8) :: tgt
+   integer  :: nbnds, i
+
+   select case (swlw)
+   case ('sw','SW','shortwave')
+      nbnds = nswbands
+      allocate(lowboundaries(nbnds), highboundaries(nbnds))
+      lowboundaries = wavenum_low
+      highboundaries = wavenum_high
+   case ('lw', 'LW', 'longwave')
+      nbnds = nlwbands
+      allocate(lowboundaries(nbnds), highboundaries(nbnds))
+      lowboundaries = wavenumber1_longwave
+      highboundaries = wavenumber2_longwave
+   case default
+      call endrun('rad_constants.F90: get_band_index_by_value: type of bands not accepted '//swlw)
+   end select
+   ! band info is in cm^-1 but target value may be other units,
+   ! so convert targetvalue to cm^-1
+   select case (units)
+   case ('inv_cm','cm^-1','cm-1')
+      tgt = targetvalue
+   case('m','meter','meters')
+      tgt = 1.0_r8 / (targetvalue * 1.e2_r8)
+   case('nm','nanometer','nanometers')
+      tgt = 1.0_r8 / (targetvalue * 1.e-7_r8)
+   case('um','micrometer','micrometers','micron','microns')
+      tgt = 1.0_r8 / (targetvalue * 1.e-4_r8)
+   case('cm','centimeter','centimeters')
+      tgt = 1._r8/targetvalue
+   case default
+      call endrun('rad_constants.F90: get_band_index_by_value: units not acceptable'//units)
+   end select
+   ! now just loop through the array
+   do i = 1,nbnds
+      if ((tgt > lowboundaries(i)) .and. (tgt <= highboundaries(i))) then
+         ans = i
+         exit
+      end if
+   end do
+   ! Do something if the answer is not found? 
+end function get_band_index_by_value
 
 end module radconstants
