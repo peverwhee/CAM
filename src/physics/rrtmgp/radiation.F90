@@ -1997,7 +1997,7 @@ contains
       call heating_rate('LW', ncol, fcnl, rd%qrlc)
 
       flns(:ncol) = fnl(:ncol, pverp)
-      flnt(:ncol) = fnl(:ncol, pverp)
+      flnt(:ncol) = fnl(:ncol, 1)
 
       rd%flnsc(:ncol) = fcnl(:ncol, pverp)
       rd%flntc(:ncol) = fcnl(:ncol, 1)    ! net lw flux at top-of-model
