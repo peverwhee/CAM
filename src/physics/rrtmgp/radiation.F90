@@ -744,6 +744,8 @@ subroutine radiation_init(pbuf2d)
       end if
    end do
 
+   call addfld('EMIS', (/ 'lev' /), 'A', '1', 'Cloud longwave emissivity') ! COSP-related output
+
    ! NOTE: HIRS/MSU diagnostic brightness temperatures are removed.
 
    ! Heating rate needed for d(theta)/dt computation
