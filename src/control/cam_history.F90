@@ -4690,6 +4690,7 @@ end subroutine print_active_fldlst
            num_hdims = 2
            do i = 1, num_hdims
              dimindex(i) = header_info(1)%get_hdimid(i)
+             nacsdims(i) = header_info(1)%get_hdimid(i)
            end do
          else if (patch_output) then
            ! All patches for this variable should be on the same grid
@@ -4715,6 +4716,7 @@ end subroutine print_active_fldlst
            num_hdims = header_info(grd)%num_hdims()
            do i = 1, num_hdims
              dimindex(i) = header_info(grd)%get_hdimid(i)
+             nacsdims(i) = header_info(grd)%get_hdimid(i)
            end do
          end if     ! is_satfile
 
@@ -4830,64 +4832,9 @@ end subroutine print_active_fldlst
                   tape(t)%hlist(fld)%field%name)
              call cam_pio_handle_error(ierr,                                     &
                   'h_define: cannot define basename for '//trim(fname_tmp))
-          end if
-          if(restart) then
-             ! for standard deviation
-             if (associated(tape(t)%hlist(fld)%sbuf)) then
-                fname_tmp = strip_suffix(tape(t)%hlist(fld)%field%name)
-                fname_tmp = trim(fname_tmp)//'_var'
-                if ( .not.associated(tape(t)%hlist(fld)%sbuf_varid)) then
-                   allocate(tape(t)%hlist(fld)%sbuf_varid)
-                endif
-                call cam_pio_def_var(tape(t)%Files(f), trim(fname_tmp), pio_double,      &
-                     dimids_tmp(1:fdims), tape(t)%hlist(fld)%sbuf_varid)
-             endif
-          endif
+           end if
           end do ! Loop over output patches
-       end do   ! Loop over fields
-       if (restart) then
-          do fld = 1, nflds(t)
-             if(is_satfile(t)) then
-                num_hdims=0
-                nfils(t)=1
-             else if (interpolate) then
-                ! Interpolate can't use normal grid code since we are forcing fields
-                ! to use interpolate decomp
-                if (.not. allocated(header_info)) then
-                   ! Safety check
-                   call endrun('h_define: header_info not allocated')
-                end if
-                num_hdims = 2
-                do i = 1, num_hdims
-                   nacsdims(i) = header_info(1)%get_hdimid(i)
-                end do
-             else if (patch_output) then
-                ! All patches for this variable should be on the same grid
-                num_hdims = tape(t)%patches(1)%num_hdims(tape(t)%hlist(fld)%field%decomp_type)
-             else
-                ! Normal grid output
-                ! Find appropriate grid in header_info
-                if (.not. allocated(header_info)) then
-                   ! Safety check
-                   call endrun('h_define: header_info not allocated')
-                end if
-                grd = -1
-                do i = 1, size(header_info)
-                   if (header_info(i)%get_gridid() == tape(t)%hlist(fld)%field%decomp_type) then
-                      grd = i
-                      exit
-                   end if
-                end do
-                if (grd < 0) then
-                   write(errormsg, '(a,i0,2a)') 'grid, ',tape(t)%hlist(fld)%field%decomp_type,', not found for ',trim(fname_tmp)
-                   call endrun('H_DEFINE: '//errormsg)
-                end if
-                num_hdims = header_info(grd)%num_hdims()
-                do i = 1, num_hdims
-                   nacsdims(i) = header_info(grd)%get_hdimid(i)
-                end do
-             end if     ! is_satfile
-
+          if (restart) then
              fname_tmp = strip_suffix(tape(t)%hlist(fld)%field%name)
              ! For restart history files, we need to save accumulation counts
              fname_tmp = trim(fname_tmp)//'_nacs'
@@ -4902,9 +4849,18 @@ end subroutine print_active_fldlst
                 call cam_pio_def_var(tape(t)%Files(f), trim(fname_tmp), pio_int,      &
                      tape(t)%hlist(fld)%nacs_varid)
              end if
-
-          end do   ! Loop over fields
-       end if
+             ! for standard deviation
+             if (associated(tape(t)%hlist(fld)%sbuf)) then
+                fname_tmp = strip_suffix(tape(t)%hlist(fld)%field%name)
+                fname_tmp = trim(fname_tmp)//'_var'
+                if ( .not.associated(tape(t)%hlist(fld)%sbuf_varid)) then
+                   allocate(tape(t)%hlist(fld)%sbuf_varid)
+                endif
+                call cam_pio_def_var(tape(t)%Files(f), trim(fname_tmp), pio_double,      &
+                     dimids_tmp(1:fdims), tape(t)%hlist(fld)%sbuf_varid)
+             endif
+          end if ! is restart
+       end do   ! Loop over fields
        !
        deallocate(mdimids)
        ret = pio_enddef(tape(t)%Files(f))
