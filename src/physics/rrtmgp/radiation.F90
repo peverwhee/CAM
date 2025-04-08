@@ -886,6 +886,7 @@ subroutine radiation_tend( &
    real(r8), pointer :: fsnt(:)  ! Net column abs solar flux at model top
    real(r8), pointer :: flns(:)  ! Srf longwave cooling (up-down) flux
    real(r8), pointer :: flnt(:)  ! Net outgoing lw flux at model top
+   real(r8), allocatable :: flwds(:)
 
    real(r8), pointer :: dei(:,:)
    real(r8), pointer :: mu(:,:)
@@ -1096,7 +1097,7 @@ subroutine radiation_tend( &
 
       allocate( &
          t_sfc(ncol), emis_sfc(nlwbands,ncol), toa_flux(nday,nswgpts),     &
-         sfac(nday,nswgpts),                                               &
+         sfac(nday,nswgpts), flwds(pcols),                                  &
          t_rad(ncol,nlay), pmid_rad(ncol,nlay), pint_rad(ncol,nlay+1),     &
          t_day(nday,nlay), pmid_day(nday,nlay), pint_day(nday,nlay+1),     &
          coszrs_day(nday), alb_dir(nswbands,nday), alb_dif(nswbands,nday), &
@@ -1336,7 +1337,7 @@ subroutine radiation_tend( &
                call set_lw_diags()
 
                if (write_output) then
-                  call radiation_output_lw(lchnk, ncol, icall, rd, pbuf, cam_out)
+                  call radiation_output_lw(lchnk, ncol, icall, rd, pbuf, cam_out, flwds)
                end if
 
             end if ! (active_calls(icall))
@@ -1428,8 +1429,9 @@ subroutine radiation_tend( &
    end if
 
    ! Calculate radiative heating (Q*dp), set netsw flux, and do object cleanup
-   call rrtmgp_post_run(ncol, qrs, qrl, fsns, state%pdel, atm_optics_sw, cloud_sw, aer_sw, &
-                  fsw, fswc, sources_lw, cloud_lw, aer_lw, flw, flwc, cam_out%netsw, errmsg, errflg)
+   call rrtmgp_post_run(ncol, nlay, dolw, qrs, qrl, fsns, state%pdel, atm_optics_sw, cloud_sw, aer_sw, &
+                  fsw, fswc, sources_lw, cloud_lw, aer_lw, flw, flwc, cam_out%netsw, cam_out%flwds, &
+                  errmsg, errflg)
    if (errflg /= 0) then
      call endrun(sub//': '//errmsg)
    end if
@@ -1574,8 +1576,8 @@ subroutine radiation_tend( &
       rd%flnsc(:ncol) = fcnl(:ncol, pverp)
       rd%flntc(:ncol) = fcnl(:ncol, ktopcam)    ! net lw flux at top-of-model
 
-      cam_out%flwds(:ncol) = flw%fluxes%flux_dn(:, nlay+1)
-      rd%fldsc(:ncol)      = flwc%fluxes%flux_dn(:, nlay+1)
+      flwds(:ncol)    = flw%fluxes%flux_dn(:, nlay+1)
+      rd%fldsc(:ncol) = flwc%fluxes%flux_dn(:, nlay+1)
 
       rd%flut(:ncol)  = flw%fluxes%flux_up(:, ktoprad)
       rd%flutc(:ncol) = flwc%fluxes%flux_up(:, ktoprad)
@@ -1737,7 +1739,7 @@ end subroutine radiation_output_cld
 
 !===============================================================================
 
-subroutine radiation_output_lw(lchnk, ncol, icall, rd, pbuf, cam_out)
+subroutine radiation_output_lw(lchnk, ncol, icall, rd, pbuf, cam_out, flwds)
 
    ! Dump longwave radiation information to history buffer
 
@@ -1745,6 +1747,7 @@ subroutine radiation_output_lw(lchnk, ncol, icall, rd, pbuf, cam_out)
    integer,                intent(in) :: ncol
    integer,                intent(in) :: icall  ! icall=0 for climate diagnostics
    type(rad_out_t),        intent(in) :: rd
+   real(r8),               intent(in) :: flwds(:)
    type(physics_buffer_desc), pointer :: pbuf(:)
    type(cam_out_t),        intent(in) :: cam_out
 
@@ -1780,7 +1783,7 @@ subroutine radiation_output_lw(lchnk, ncol, icall, rd, pbuf, cam_out)
    call outfld('FLNS'//diag(icall),    flns,          pcols, lchnk)
    call outfld('FLNSC'//diag(icall),   rd%flnsc,      pcols, lchnk)
 
-   call outfld('FLDS'//diag(icall),    cam_out%flwds, pcols, lchnk)
+   call outfld('FLDS'//diag(icall),    flwds,         pcols, lchnk)
    call outfld('FLDSC'//diag(icall),   rd%fldsc,      pcols, lchnk)
 
    call outfld('FDL'//diag(icall),  rd%flux_lw_dn,     pcols, lchnk)
