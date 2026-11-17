@@ -31,6 +31,7 @@ help () {
   echo "${hprefix} [ --rerun-cesm <test_id> ] (rerun the cesm tests with the --use-existing-flag)"
   echo "${hprefix} [ --namelists-only ] (Only perform namelist actions for tests.  Incompatible with --rerun-cesm.)"
   echo "${hprefix} [ --batch ] (Allow cime tests to run in parallel.)"
+  echo "${hprefix} [ --slow-queue ] (Derecho only: premium job priority for the driver job and all tests; no test retries)"
   echo ""
   echo "${hprefix} **pass environment variables by preceding above commands with:"
   echo "${hprefix}   'env var1=setting var2=setting '"
@@ -80,6 +81,7 @@ interactive=false
 use_existing=''
 namelists_only=false
 batch=false
+slow_queue=false
 
 # Understand where we are and where the CAM root and CIME reside
 if [ -n "${CAM_ROOT}" ]; then
@@ -202,6 +204,10 @@ while [ "${1:0:1}" == "-" ]; do
             batch=true
             ;;
 
+        --slow-queue )
+            slow_queue=true
+            ;;
+
     esac
     shift
 done
@@ -273,6 +279,10 @@ cat > ${submit_script_cime} << EOF
 #PBS -j oe
 
 EOF
+
+    if $slow_queue; then
+      sed -i '/^#PBS -j oe/i #PBS -l job_priority=premium' ${submit_script_cime}
+    fi
 
 ##^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ writing to batch script ^^^^^^^^^^^^^^^^^^^
     ;;
@@ -478,7 +488,12 @@ if [ "${cesm_test_suite}" != "none" -a -n "${cesm_test_mach}" ]; then
 
 
   for cesm_test in ${cesm_test_suite}; do
-    testargs="--xml-category ${cesm_test} --xml-machine ${cesm_test_mach} --retry 2"
+    if $slow_queue; then
+      test_retries=0
+    else
+      test_retries=2
+    fi
+    testargs="--xml-category ${cesm_test} --xml-machine ${cesm_test_mach} --retry ${test_retries}"
 
     if [ -n "${use_existing}" ]; then
       test_id="${use_existing}"
@@ -636,7 +651,27 @@ if [ "${cesm_test_suite}" != "none" -a -n "${cesm_test_mach}" ]; then
 
     if [ "${hostname:0:2}" == "de" ]; then
       echo "cd ${script_dir}" >> ${submit_script_cime}
-      echo './create_test' ${testargs} >> ${submit_script_cime}
+      if $slow_queue; then
+        # Set up the test cases (unless they already exist), set premium
+        # job priority in each case, then resume create_test to build and run.
+        if [ -z "${use_existing}" ]; then
+          echo './create_test' ${testargs} --no-build >> ${submit_script_cime}
+        fi
+        cat >> ${submit_script_cime} << EOF
+for casedir in ${cesm_testdir}/*.${test_id}; do
+  if [ -x "\${casedir}/xmlchange" ]; then
+    (cd "\${casedir}" && ./xmlchange JOB_PRIORITY=premium)
+  fi
+done
+EOF
+        if [ -z "${use_existing}" ]; then
+          echo './create_test' ${testargs} --use-existing >> ${submit_script_cime}
+        else
+          echo './create_test' ${testargs} >> ${submit_script_cime}
+        fi
+      else
+        echo './create_test' ${testargs} >> ${submit_script_cime}
+      fi
       chmod u+x ${submit_script_cime}
       qsub ${submit_script_cime}
    fi
