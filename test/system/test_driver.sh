@@ -665,7 +665,9 @@ for casedir in ${cesm_testdir}/*.${test_id}; do
 done
 EOF
         if [ -z "${use_existing}" ]; then
-          echo './create_test' ${testargs} --use-existing >> ${submit_script_cime}
+          # The setup phase already wrote namelist baselines when generating,
+          # so -o is needed for create_test to accept the existing baseline dirs.
+          echo './create_test' ${testargs} --use-existing -o >> ${submit_script_cime}
         else
           echo './create_test' ${testargs} >> ${submit_script_cime}
         fi
